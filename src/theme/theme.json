@@ -1,0 +1,11 @@
+{
+  "colors": { "background": "#15110c", "text": "#ede6d6", "accent": "#ff5a36" },
+  "font": { "family": "system-ui, sans-serif", "baseSize": 16 },
+  "cards": [
+    { "source": "heatIndex", "visible": true, "size": "large", "order": 0 },
+    { "source": "gsr", "visible": true, "size": "small", "order": 1 },
+    { "source": "hr", "visible": true, "size": "small", "order": 2 },
+    { "source": "temp", "visible": true, "size": "small", "order": 3 },
+    { "source": "imu", "visible": false, "size": "small", "order": 4 }
+  ]
+}
