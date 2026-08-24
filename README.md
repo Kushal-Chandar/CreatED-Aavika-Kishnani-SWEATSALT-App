@@ -1,32 +1,51 @@
-# React + TypeScript + Vite
+# SweatSalt Companion App
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Companion PWA for the SweatSalt heat-stress wearable. Shows a live
+dashboard (mock sensor data for now — real BLE wired in at session 15)
+with a themeable layout.
 
-Currently, two official plugins are available:
+## Develop
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Opens with live-reload. A "Edit theme" button appears in the bottom
+corner — dev-only, gone entirely from the production build. Use it to
+change colors, which sensor shows in which card, and card
+order/visibility, with the dashboard updating live as you edit. Hit
+"Save to theme.json" to write your changes to
+`src/theme/theme.json` — that's the file that ships.
+
+## Test
+
+```
+npm run test
+```
+
+## Build + deploy
+
+```
+npm run build
+git add -A
+git commit -m "your change"
+git push
+```
+
+Pushing to `main` triggers the GitHub Actions workflow, which builds
+and publishes to GitHub Pages at:
+
+https://<your-github-username>.github.io/sweatsalt-app/
+
+## Project structure
+
+- `src/datasource/` — `DataSource` interface, `MockDataSource` (demo
+  data), `BleDataSource` (real hardware, session 15)
+- `src/theme/theme.json` — drives colors, layout, and which sensor
+  shows in which card; edit it via the dev-only theme editor (see
+  above) or by hand
+- `src/dashboard/` — the dashboard UI and the placeholder heat-index
+  formula
+- `src/log/` — local IndexedDB log (14-day retention, for later
+  debugging)
