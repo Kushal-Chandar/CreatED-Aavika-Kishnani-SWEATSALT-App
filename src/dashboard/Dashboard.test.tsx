@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { Dashboard } from "./Dashboard";
 import { ThemeProvider } from "../theme/ThemeContext";
-import type { DataSource, Reading, ConnectionStatus } from "../datasource/types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "../datasource/types";
 
 class FakeDataSource implements DataSource {
   private readingCb: ((r: Reading) => void) | null = null;
@@ -18,6 +18,8 @@ class FakeDataSource implements DataSource {
   onStatusChange(cb: (s: ConnectionStatus) => void): void {
     this.statusCb = cb;
   }
+  onDeviceInfo(_cb: (info: DeviceInfo) => void): void {}
+  onBattery(_cb: (percent: number) => void): void {}
   emit(reading: Reading): void {
     this.readingCb?.(reading);
   }

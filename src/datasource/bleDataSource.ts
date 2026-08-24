@@ -1,4 +1,4 @@
-import type { DataSource, Reading, ConnectionStatus } from "./types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "./types";
 
 // GATT service/characteristic UUIDs are not yet defined — firmware
 // (session 14, 2026-09-12) doesn't exist yet. This class implements the
@@ -10,6 +10,8 @@ export class BleDataSource implements DataSource {
   private device: BluetoothDevice | null = null;
   private readingListeners: Array<(r: Reading) => void> = [];
   private statusListeners: Array<(s: ConnectionStatus) => void> = [];
+  private deviceInfoListeners: Array<(d: DeviceInfo) => void> = [];
+  private batteryListeners: Array<(percent: number) => void> = [];
 
   private emitStatus(status: ConnectionStatus): void {
     this.statusListeners.forEach((cb) => cb(status));
@@ -28,6 +30,12 @@ export class BleDataSource implements DataSource {
       // Characteristic subscription (session 15): once firmware's GATT
       // layout is known, subscribe to its notify characteristics here
       // and forward each notification to this.readingListeners.
+      //
+      // Device Information Service (0x180A) → this.deviceInfoListeners
+      // (Manufacturer/Model/Serial characteristics give id + name).
+      // Battery Service (0x180F) → this.batteryListeners (Battery Level
+      // characteristic, 0-100, with notify). Both are standard BLE
+      // services the firmware just needs to expose — no custom protocol.
     } catch {
       this.emitStatus("disconnected");
     }
@@ -44,5 +52,13 @@ export class BleDataSource implements DataSource {
 
   onStatusChange(cb: (s: ConnectionStatus) => void): void {
     this.statusListeners.push(cb);
+  }
+
+  onDeviceInfo(cb: (info: DeviceInfo) => void): void {
+    this.deviceInfoListeners.push(cb);
+  }
+
+  onBattery(cb: (percent: number) => void): void {
+    this.batteryListeners.push(cb);
   }
 }

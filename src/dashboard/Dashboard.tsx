@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import type { DataSource, Reading, SensorSource, ConnectionStatus } from "../datasource/types";
+import type { DataSource, Reading, SensorSource, ConnectionStatus, DeviceInfo } from "../datasource/types";
 import { useThemeConfig } from "../theme/ThemeContext";
 import { Card } from "./Card";
 import { SaltDivider } from "./SaltDivider";
+import { BatteryPill } from "./BatteryPill";
 import { computeHeatIndex } from "./IndexCalc";
 import { appendEntry, pruneOldEntries } from "../log/logStore";
-import "./dashboard.css";
 
 interface DashboardProps {
   dataSource: DataSource;
@@ -20,6 +20,8 @@ export function Dashboard({ dataSource }: DashboardProps) {
   const theme = useThemeConfig();
   const [values, setValues] = useState<ValueMap>({});
   const [status, setStatus] = useState<ConnectionStatus>("connected");
+  const [battery, setBattery] = useState<number | undefined>(undefined);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | undefined>(undefined);
   const [booted, setBooted] = useState(false);
   const prefersReducedMotion = useReducedMotion();
 
@@ -40,6 +42,8 @@ export function Dashboard({ dataSource }: DashboardProps) {
 
     dataSource.onReading(handleReading);
     dataSource.onStatusChange(setStatus);
+    dataSource.onDeviceInfo(setDeviceInfo);
+    dataSource.onBattery(setBattery);
     dataSource.start();
     return () => dataSource.stop();
   }, [dataSource]);
@@ -67,7 +71,7 @@ export function Dashboard({ dataSource }: DashboardProps) {
 
   return (
     <div
-      className="dashboard"
+      className="relative flex min-h-dvh items-center justify-center overflow-x-hidden font-sans"
       style={{
         background: theme.colors.background,
         color: theme.colors.text,
@@ -77,26 +81,43 @@ export function Dashboard({ dataSource }: DashboardProps) {
     >
       <AnimatePresence>
         {!booted && (
-          <motion.div className="splash" exit={{ opacity: 0 }} transition={{ duration: 0.4 }}>
-            <span className="splash__wordmark">
-              SWEAT<span className="splash__accent" style={{ color: theme.colors.accent }}>SALT</span>
+          <motion.div
+            className="absolute inset-0 z-40 flex items-center justify-center"
+            style={{ background: theme.colors.background }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+          >
+            <span className="font-mono text-2xl font-bold tracking-wider md:text-3xl">
+              SWEAT<span style={{ color: theme.colors.accent }}>SALT</span>
             </span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="dashboard__inner">
-        <header className="dashboard__header">
-          <span className="dashboard__wordmark">
-            SWEAT<span style={{ color: theme.colors.accent }}>SALT</span>
-          </span>
-          <span className="dashboard__subtitle">Heat-stress companion</span>
+      <div className="w-full max-w-[640px] px-5 py-6 max-[420px]:px-3.5">
+        <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-mono text-lg font-bold tracking-wider">
+              SWEAT<span style={{ color: theme.colors.accent }}>SALT</span>
+            </div>
+            <div className="font-sans text-[0.7rem] tracking-widest text-white/50 uppercase">
+              Heat-stress companion
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <BatteryPill percent={battery} />
+            {deviceInfo && (
+              <div className="font-sans text-[0.65rem] text-white/40">
+                {deviceInfo.name} <span className="font-mono">· {deviceInfo.id}</span>
+              </div>
+            )}
+          </div>
         </header>
 
         <AnimatePresence>
           {status === "disconnected" && (
             <motion.div
-              className="dashboard__banner"
+              className="bg-danger mb-5 cursor-pointer px-4 py-2.5 font-sans font-semibold text-[#15110c] [clip-path:polygon(0.6rem_0,100%_0,calc(100%-0.6rem)_100%,0_100%)]"
               data-testid="disconnected-banner"
               onClick={() => dataSource.start()}
               initial={{ opacity: 0, y: -8 }}
@@ -112,7 +133,7 @@ export function Dashboard({ dataSource }: DashboardProps) {
           <Card key={card.source} config={card} value={values[card.source as SensorSource]} />
         ))}
         {heroCards.length > 0 && tileCards.length > 0 && <SaltDivider />}
-        <div className="tiles">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3">
           {tileCards.map((card) => (
             <Card key={card.source} config={card} value={values[card.source as SensorSource]} />
           ))}

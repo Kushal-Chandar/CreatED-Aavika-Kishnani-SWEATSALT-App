@@ -72,4 +72,30 @@ describe("MockDataSource", () => {
 
     expect(readings.length).toBe(countAtDisconnect);
   });
+
+  it("reports device info on start", () => {
+    const source = new MockDataSource();
+    const infos: Array<{ id: string; name: string }> = [];
+    source.onDeviceInfo((info) => infos.push(info));
+
+    source.start();
+
+    expect(infos).toHaveLength(1);
+    expect(infos[0].id).toBeTruthy();
+    expect(infos[0].name).toBeTruthy();
+  });
+
+  it("reports a slowly-draining battery percentage on each tick", () => {
+    const source = new MockDataSource();
+    const levels: number[] = [];
+    source.onBattery((percent) => levels.push(percent));
+
+    source.start();
+    vi.advanceTimersByTime(3000);
+
+    expect(levels).toHaveLength(3);
+    expect(levels[0]).toBeGreaterThanOrEqual(0);
+    expect(levels[0]).toBeLessThanOrEqual(100);
+    expect(levels[2]).toBeLessThanOrEqual(levels[0]);
+  });
 });

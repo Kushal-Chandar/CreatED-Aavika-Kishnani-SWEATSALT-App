@@ -1,3 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --color-safe: #3fa796;
+  --color-warn: #e8a33d;
+  --color-danger: #d64545;
+  --color-surface: #1f1a14;
+  --color-hairline: rgba(237, 230, 214, 0.14);
+}
+
 :root {
   color-scheme: dark;
 }

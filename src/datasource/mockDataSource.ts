@@ -1,4 +1,4 @@
-import type { DataSource, Reading, ConnectionStatus } from "./types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "./types";
 
 type MockSource = Reading["source"];
 
@@ -8,6 +8,8 @@ const RANGES: Record<MockSource, { min: number; max: number; start: number }> = 
   temp: { min: 30, max: 39, start: 33.5 },
   imu: { min: 0, max: 4, start: 1 },
 };
+
+const MOCK_DEVICE: DeviceInfo = { id: "SWST-7F3A21", name: "SweatSalt Dev Unit" };
 
 // One 30-tick (30s) cycle: normal drift, a 5-tick spike toward the high
 // end of each range (exercises the "elevated"/"high" hero states), then
@@ -24,6 +26,8 @@ export class MockDataSource implements DataSource {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private readingListeners: Array<(r: Reading) => void> = [];
   private statusListeners: Array<(s: ConnectionStatus) => void> = [];
+  private deviceInfoListeners: Array<(d: DeviceInfo) => void> = [];
+  private batteryListeners: Array<(percent: number) => void> = [];
   private current: Record<MockSource, number> = {
     gsr: RANGES.gsr.start,
     hr: RANGES.hr.start,
@@ -32,16 +36,20 @@ export class MockDataSource implements DataSource {
   };
   private tick = 0;
   private connected = true;
+  private battery = 87;
 
   start(): void {
     if (this.intervalId) return;
     this.intervalId = setInterval(() => this.tickOnce(), 1000);
     this.statusListeners.forEach((cb) => cb("connected"));
+    this.deviceInfoListeners.forEach((cb) => cb(MOCK_DEVICE));
   }
 
   private tickOnce(): void {
     this.tick += 1;
     const cycle = this.tick % CYCLE_TICKS;
+
+    this.battery = Math.max(0, this.battery - (0.02 + Math.random() * 0.01));
 
     if (cycle === DISCONNECT_START) {
       this.connected = false;
@@ -57,6 +65,8 @@ export class MockDataSource implements DataSource {
       this.statusListeners.forEach((cb) => cb("connected"));
       // fall through — this tick also emits a normal reading
     }
+
+    this.batteryListeners.forEach((cb) => cb(Math.round(this.battery)));
 
     const spiking = cycle >= SPIKE_START && cycle < SPIKE_END;
 
@@ -86,5 +96,13 @@ export class MockDataSource implements DataSource {
 
   onStatusChange(cb: (s: ConnectionStatus) => void): void {
     this.statusListeners.push(cb);
+  }
+
+  onDeviceInfo(cb: (info: DeviceInfo) => void): void {
+    this.deviceInfoListeners.push(cb);
+  }
+
+  onBattery(cb: (percent: number) => void): void {
+    this.batteryListeners.push(cb);
   }
 }
