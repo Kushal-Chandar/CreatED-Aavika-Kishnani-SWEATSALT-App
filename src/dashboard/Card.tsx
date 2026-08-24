@@ -33,7 +33,7 @@ function HeroReadout({ label, value, testId }: { label: string; value: number | 
 
   return (
     <div
-      className="bg-surface px-6 pt-8 pb-7 [clip-path:polygon(1.25rem_0,100%_0,100%_calc(100%-1.25rem),calc(100%-1.25rem)_100%,0_100%,0_1.25rem)]"
+      className="bg-surface rounded-3xl px-6 pt-8 pb-7 shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
       data-testid={testId}
     >
       <div className="font-sans text-xs font-semibold tracking-[0.18em] text-white/60 uppercase">{label}</div>
@@ -64,7 +64,7 @@ export function Card({ config, value }: CardProps) {
   if (!label) {
     return (
       <div
-        className="bg-surface border-hairline px-4 py-3.5 [clip-path:polygon(0.6rem_0,100%_0,100%_100%,0_100%,0_0.6rem)]"
+        className="bg-surface border-hairline rounded-2xl border px-4 py-3.5"
         data-testid={`card-${config.source}`}
       >
         <div className="font-sans text-white/60 italic">Unknown source: {config.source}</div>
@@ -79,7 +79,7 @@ export function Card({ config, value }: CardProps) {
   if (config.source === "imu") {
     return (
       <motion.div
-        className="bg-surface border-hairline flex flex-col border-t-2 px-4 py-3.5 [clip-path:polygon(0.6rem_0,100%_0,100%_100%,0_100%,0_0.6rem)]"
+        className="bg-surface rounded-2xl flex flex-col px-4 py-3.5 shadow-[0_6px_18px_rgba(0,0,0,0.3)]"
         data-testid={`card-${config.source}`}
         initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -93,7 +93,7 @@ export function Card({ config, value }: CardProps) {
 
   return (
     <motion.div
-      className="bg-surface border-hairline border-t-2 px-4 py-3.5 [clip-path:polygon(0.6rem_0,100%_0,100%_100%,0_100%,0_0.6rem)]"
+      className="bg-surface rounded-2xl px-4 py-3.5 shadow-[0_6px_18px_rgba(0,0,0,0.3)]"
       data-testid={`card-${config.source}`}
       initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}

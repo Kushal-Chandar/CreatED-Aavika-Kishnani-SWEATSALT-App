@@ -117,7 +117,7 @@ export function Dashboard({ dataSource }: DashboardProps) {
         <AnimatePresence>
           {status === "disconnected" && (
             <motion.div
-              className="bg-danger mb-5 cursor-pointer px-4 py-2.5 font-sans font-semibold text-[#15110c] [clip-path:polygon(0.6rem_0,100%_0,calc(100%-0.6rem)_100%,0_100%)]"
+              className="bg-danger mb-5 cursor-pointer rounded-full px-4 py-2.5 text-center font-sans font-semibold text-[#15110c]"
               data-testid="disconnected-banner"
               onClick={() => dataSource.start()}
               initial={{ opacity: 0, y: -8 }}
