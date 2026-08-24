@@ -1,0 +1,130 @@
+:root {
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --safe: #3fa796;
+  --warn: #e8a33d;
+  --danger: #d64545;
+  --surface: #1f1a14;
+  --hairline: rgba(237, 230, 214, 0.14);
+}
+
+.dashboard {
+  min-height: 100vh;
+  padding: 1.5rem 1.25rem 3rem;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+}
+
+.dashboard__banner {
+  background: var(--danger);
+  color: #15110c;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1.25rem;
+  cursor: pointer;
+  clip-path: polygon(0.6rem 0, 100% 0, calc(100% - 0.6rem) 100%, 0 100%);
+}
+
+.hero {
+  background: var(--surface);
+  padding: 2rem 1.5rem 1.75rem;
+  clip-path: polygon(
+    1.25rem 0, 100% 0, 100% calc(100% - 1.25rem),
+    calc(100% - 1.25rem) 100%, 0 100%, 0 1.25rem
+  );
+}
+
+.hero__eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.hero__value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: clamp(3.5rem, 12vw, 5.5rem);
+  line-height: 1;
+  margin: 0.5rem 0 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero__scale {
+  position: relative;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--safe), var(--warn) 55%, var(--danger));
+}
+
+.hero__marker {
+  position: absolute;
+  top: -0.35rem;
+  width: 2px;
+  height: 1.2rem;
+  transform: translateX(-1px);
+}
+
+.hero__scale-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-top: 0.4rem;
+}
+
+.salt-divider {
+  display: block;
+  width: 100%;
+  height: 1.25rem;
+  margin: 1.75rem 0 1.5rem;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
+.tile {
+  background: var(--surface);
+  padding: 0.9rem 1rem;
+  clip-path: polygon(0.6rem 0, 100% 0, 100% 100%, 0 100%, 0 0.6rem);
+  border-top: 2px solid var(--hairline);
+}
+
+.tile__label {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.tile__value {
+  font-family: var(--font-mono);
+  font-size: 1.6rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.3rem;
+}
+
+.tile__unit {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  opacity: 0.5;
+  margin-left: 0.3rem;
+}
+
+.card__unknown {
+  font-family: var(--font-sans);
+  opacity: 0.6;
+  font-style: italic;
+}
