@@ -1,11 +1,53 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import type { Plugin } from "vite";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Dev-only endpoint the ThemeEditorPanel posts to. `configureServer` only
+// runs under `vite dev`/`vite serve`, never during `vite build` — so this
+// write path (and the ability to edit theme.json from the browser at all)
+// does not exist in the production bundle.
+function themeEditorSavePlugin(): Plugin {
+  return {
+    name: "sweatsalt-theme-editor-save",
+    configureServer(server) {
+      server.middlewares.use("/__theme/save", (req, res) => {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end();
+          return;
+        }
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          try {
+            const parsed = JSON.parse(body);
+            const themePath = path.resolve(__dirname, "src/theme/theme.json");
+            fs.writeFileSync(themePath, JSON.stringify(parsed, null, 2) + "\n");
+            res.statusCode = 200;
+            res.end("ok");
+          } catch (err) {
+            res.statusCode = 400;
+            res.end(String(err));
+          }
+        });
+      });
+    },
+  };
+}
 
 export default defineConfig({
   base: "/sweatsalt-app/",
   plugins: [
     react(),
+    themeEditorSavePlugin(),
     VitePWA({
       registerType: "autoUpdate",
       manifest: {

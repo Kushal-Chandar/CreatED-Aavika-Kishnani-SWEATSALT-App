@@ -1,5 +1,5 @@
-import { createContext, useContext, type ReactNode } from "react";
-import themeData from "./theme.json";
+import { createContext, useContext, useState, type ReactNode } from "react";
+import defaultTheme from "./theme.json";
 
 export interface CardConfig {
   source: string;
@@ -14,14 +14,28 @@ export interface ThemeConfig {
   cards: CardConfig[];
 }
 
-const theme = themeData as ThemeConfig;
+interface ThemeContextValue {
+  theme: ThemeConfig;
+  setTheme: (theme: ThemeConfig) => void;
+}
 
-const ThemeConfigContext = createContext<ThemeConfig>(theme);
+const initialTheme = defaultTheme as ThemeConfig;
+
+const ThemeConfigContext = createContext<ThemeContextValue>({
+  theme: initialTheme,
+  setTheme: () => {},
+});
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  return <ThemeConfigContext.Provider value={theme}>{children}</ThemeConfigContext.Provider>;
+  const [theme, setTheme] = useState<ThemeConfig>(initialTheme);
+  return <ThemeConfigContext.Provider value={{ theme, setTheme }}>{children}</ThemeConfigContext.Provider>;
 }
 
 export function useThemeConfig(): ThemeConfig {
-  return useContext(ThemeConfigContext);
+  return useContext(ThemeConfigContext).theme;
+}
+
+export function useThemeEditor(): [ThemeConfig, (theme: ThemeConfig) => void] {
+  const ctx = useContext(ThemeConfigContext);
+  return [ctx.theme, ctx.setTheme];
 }
