@@ -9,10 +9,64 @@
 }
 
 .dashboard {
+  position: relative;
   min-height: 100vh;
-  padding: 1.5rem 1.25rem 3rem;
+  min-height: 100dvh;
   box-sizing: border-box;
   font-family: var(--font-sans);
+  overflow-x: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard__inner {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+  box-sizing: border-box;
+}
+
+.dashboard__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+}
+
+.dashboard__wordmark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+}
+
+.dashboard__subtitle {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.5;
+}
+
+.splash {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: inherit;
+}
+
+.splash__wordmark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.75rem;
+  letter-spacing: 0.12em;
 }
 
 .dashboard__banner {
@@ -47,7 +101,7 @@
 .hero__value {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: clamp(3.5rem, 12vw, 5.5rem);
+  font-size: clamp(3.5rem, 16vw, 5.5rem);
   line-height: 1;
   margin: 0.5rem 0 1.25rem;
   font-variant-numeric: tabular-nums;
@@ -88,7 +142,7 @@
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 0.75rem;
 }
 
@@ -127,4 +181,46 @@
   font-family: var(--font-sans);
   opacity: 0.6;
   font-style: italic;
+}
+
+.tile--imu {
+  display: flex;
+  flex-direction: column;
+}
+
+.wrist-tilt__stage {
+  perspective: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 56px;
+  margin-top: 0.4rem;
+}
+
+.wrist-tilt__band {
+  width: 60px;
+  height: 26px;
+  background: linear-gradient(135deg, rgba(237, 230, 214, 0.14), rgba(237, 230, 214, 0.04));
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  transform-style: preserve-3d;
+  position: relative;
+}
+
+.wrist-tilt__face {
+  position: absolute;
+  inset: 4px 10px;
+  background: rgba(237, 230, 214, 0.18);
+  border-radius: 3px;
+}
+
+@media (max-width: 420px) {
+  .dashboard__inner {
+    padding: 1.1rem 0.85rem 2.5rem;
+  }
+
+  .hero {
+    padding: 1.5rem 1.1rem 1.4rem;
+  }
 }

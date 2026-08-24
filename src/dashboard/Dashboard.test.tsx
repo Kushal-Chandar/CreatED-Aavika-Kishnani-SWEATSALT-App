@@ -36,7 +36,7 @@ describe("Dashboard", () => {
     );
 
     expect(screen.getByTestId("card-gsr")).toBeInTheDocument();
-    expect(screen.queryByTestId("card-imu")).not.toBeInTheDocument();
+    expect(screen.getByTestId("card-imu")).toBeInTheDocument();
 
     act(() => {
       source.emit({ source: "gsr", value: 6.5, ts: Date.now() });

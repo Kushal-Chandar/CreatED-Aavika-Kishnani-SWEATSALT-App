@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import type { CardConfig } from "../theme/ThemeContext";
 import { useThemeConfig } from "../theme/ThemeContext";
 import { useAnimatedNumber } from "./useAnimatedNumber";
+import { WristTilt } from "./WristTilt";
 
 const LABELS: Record<string, string> = {
   heatIndex: "Risk Index",
@@ -15,7 +16,6 @@ const UNITS: Record<string, string> = {
   gsr: "µS",
   hr: "bpm",
   temp: "°C",
-  imu: "g",
 };
 
 const SCALE_LABELS = ["Safe", "Elevated", "High"];
@@ -66,6 +66,21 @@ export function Card({ config, value }: CardProps) {
 
   if (config.source === "heatIndex") {
     return <HeroReadout label={label} value={value} testId={`card-${config.source}`} />;
+  }
+
+  if (config.source === "imu") {
+    return (
+      <motion.div
+        className="tile tile--imu"
+        data-testid={`card-${config.source}`}
+        initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        <div className="tile__label">{label}</div>
+        <WristTilt value={value} />
+      </motion.div>
+    );
   }
 
   return (

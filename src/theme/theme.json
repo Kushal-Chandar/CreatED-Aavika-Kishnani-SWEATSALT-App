@@ -6,6 +6,6 @@
     { "source": "gsr", "visible": true, "size": "small", "order": 1 },
     { "source": "hr", "visible": true, "size": "small", "order": 2 },
     { "source": "temp", "visible": true, "size": "small", "order": 3 },
-    { "source": "imu", "visible": false, "size": "small", "order": 4 }
+    { "source": "imu", "visible": true, "size": "small", "order": 4 }
   ]
 }

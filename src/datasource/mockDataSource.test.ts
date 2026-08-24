@@ -46,4 +46,30 @@ describe("MockDataSource", () => {
 
     expect(readings.length).toBe(countAfterFirstTick);
   });
+
+  it("periodically simulates a disconnect, then reconnects, so the alert UI is exercised without manual setup", () => {
+    const source = new MockDataSource();
+    const statuses: ConnectionStatus[] = [];
+    source.onStatusChange((s) => statuses.push(s));
+
+    source.start();
+    vi.advanceTimersByTime(26_000);
+    expect(statuses).toEqual(["connected", "disconnected"]);
+
+    vi.advanceTimersByTime(4_000);
+    expect(statuses).toEqual(["connected", "disconnected", "connected"]);
+  });
+
+  it("emits no readings while simulating a disconnect", () => {
+    const source = new MockDataSource();
+    const readings: Reading[] = [];
+    source.onReading((r) => readings.push(r));
+
+    source.start();
+    vi.advanceTimersByTime(26_000);
+    const countAtDisconnect = readings.length;
+    vi.advanceTimersByTime(1000);
+
+    expect(readings.length).toBe(countAtDisconnect);
+  });
 });
