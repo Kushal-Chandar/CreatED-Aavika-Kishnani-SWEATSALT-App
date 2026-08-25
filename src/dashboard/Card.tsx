@@ -98,7 +98,7 @@ function MotionTile({ label, value, testId }: { label: string; value: number | u
         </div>
       </div>
       <div>
-        <WristTilt value={effectiveValue} />
+        <WristTilt value={effectiveValue} tilt={liveEnabled ? liveTilt.tilt : undefined} />
         <button
           type="button"
           onClick={() => {

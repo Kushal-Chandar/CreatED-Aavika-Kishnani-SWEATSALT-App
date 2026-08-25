@@ -33,6 +33,17 @@ describe("useDeviceMotion", () => {
     });
   });
 
+  it("derives a tilt (not just magnitude) from live events", async () => {
+    vi.stubGlobal("DeviceMotionEvent", class {});
+    const { result } = renderHook(() => useDeviceMotion(true));
+
+    dispatchMotion(9.80665, 0, 0);
+
+    await waitFor(() => {
+      expect(result.current.tilt?.rotateY).toBeCloseTo(45, 2);
+    });
+  });
+
   it("attaches the listener only after permission is granted", async () => {
     const requestPermission = vi.fn().mockResolvedValue("granted");
     vi.stubGlobal("DeviceMotionEvent", class {

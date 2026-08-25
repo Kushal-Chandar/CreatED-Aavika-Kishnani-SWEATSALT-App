@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { Dashboard } from "./dashboard/Dashboard";
+import { InstallPrompt } from "./dashboard/InstallPrompt";
 import { MockDataSource } from "./datasource/mockDataSource";
 
 // Dev-only: excluded from the production bundle because this dynamic
@@ -19,6 +20,7 @@ export function App() {
   return (
     <ThemeProvider>
       <Dashboard dataSource={dataSource} />
+      <InstallPrompt />
       {ThemeEditorPanel && (
         <Suspense fallback={null}>
           <ThemeEditorPanel />

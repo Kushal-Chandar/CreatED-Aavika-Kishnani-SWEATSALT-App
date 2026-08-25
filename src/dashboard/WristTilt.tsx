@@ -1,17 +1,22 @@
 import { motion, useReducedMotion } from "framer-motion";
+import type { Tilt } from "./deviceOrientationTilt";
 
 interface WristTiltProps {
   value: number | undefined;
+  tilt?: Tilt;
 }
 
 // IMU mock range is 0-4g (see mockDataSource.ts RANGES.imu). Mapped to a
 // gentle two-axis tilt on a small 3D wrist/band silhouette — cheaper than
 // a real 3D model (no WebGL, no new dependency) while still reading as
-// "this thing is moving on someone's wrist."
-export function WristTilt({ value }: WristTiltProps) {
+// "this thing is moving on someone's wrist." When a real `tilt` (from a
+// phone's own accelerometer, already smoothed) is available, that drives
+// the rotation directly instead — it's actual orientation, not a g-force
+// guess.
+export function WristTilt({ value, tilt }: WristTiltProps) {
   const g = value ?? 1;
-  const rotateX = Math.min(28, g * 6);
-  const rotateY = Math.min(24, Math.max(-24, (g - 1) * 12));
+  const rotateX = tilt ? tilt.rotateX : Math.min(28, g * 6);
+  const rotateY = tilt ? tilt.rotateY : Math.min(24, Math.max(-24, (g - 1) * 12));
   const prefersReducedMotion = useReducedMotion();
 
   return (
