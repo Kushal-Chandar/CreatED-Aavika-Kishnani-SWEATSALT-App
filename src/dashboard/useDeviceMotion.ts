@@ -4,20 +4,24 @@ import { magnitudeToG } from "./deviceMotionMagnitude";
 interface DeviceMotionState {
   value: number | undefined;
   error: string | null;
+  retry: () => void;
 }
 
 type PermissionRequestable = {
   requestPermission?: () => Promise<"granted" | "denied">;
 };
 
-// Dev-only convenience: feeds the phone's (or a DevTools-simulated) real
-// accelerometer into the imu channel so motion visuals can be checked by
-// actually tilting the device, instead of waiting on mock spikes. iOS
-// gates this behind a permission prompt that must fire from a user
-// gesture — this hook is only ever enabled from a tap, never on mount.
+// Lets the phone's (or a DevTools-simulated) real accelerometer drive the
+// imu channel — a stand-in for the real IMU while the hardware isn't
+// wired up yet (session 15). iOS gates this behind a permission prompt
+// that must fire from a user gesture — this hook is only ever enabled
+// from a tap, never on mount. `retry` re-runs the request without
+// requiring `enabled` to toggle off first — needed because WebKit caches
+// a real denial and won't re-prompt just because `enabled` stays true.
 export function useDeviceMotion(enabled: boolean): DeviceMotionState {
   const [value, setValue] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!enabled) {
@@ -26,6 +30,7 @@ export function useDeviceMotion(enabled: boolean): DeviceMotionState {
       return;
     }
 
+    setError(null);
     let cancelled = false;
 
     function handleMotion(event: DeviceMotionEvent) {
@@ -60,7 +65,11 @@ export function useDeviceMotion(enabled: boolean): DeviceMotionState {
       cancelled = true;
       window.removeEventListener("devicemotion", handleMotion);
     };
-  }, [enabled]);
+  }, [enabled, attempt]);
 
-  return { value, error };
+  function retry() {
+    setAttempt((n) => n + 1);
+  }
+
+  return { value, error, retry };
 }

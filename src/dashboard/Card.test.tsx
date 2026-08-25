@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { Card } from "./Card";
 
 describe("Card", () => {
@@ -25,5 +25,11 @@ describe("Card", () => {
     expect(screen.getByText("1.8")).toBeInTheDocument();
     expect(screen.getByText("g")).toBeInTheDocument();
     expect(screen.getByTestId("wrist-tilt-band")).toBeInTheDocument();
+  });
+
+  it("lets anyone try motion with their own phone's tilt", () => {
+    render(<Card config={{ source: "imu", visible: true, size: "small", order: 0 }} value={1.8} />);
+    fireEvent.click(screen.getByText("Try with your phone"));
+    expect(screen.getByText("Live · tap to stop")).toBeInTheDocument();
   });
 });

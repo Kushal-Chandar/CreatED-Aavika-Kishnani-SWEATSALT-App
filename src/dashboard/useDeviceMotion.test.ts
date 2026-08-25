@@ -61,4 +61,25 @@ describe("useDeviceMotion", () => {
     });
     expect(result.current.value).toBeUndefined();
   });
+
+  it("re-requests permission when retry is called, without needing to toggle enabled off", async () => {
+    const requestPermission = vi.fn().mockResolvedValueOnce("denied").mockResolvedValueOnce("granted");
+    vi.stubGlobal("DeviceMotionEvent", class {
+      static requestPermission = requestPermission;
+    });
+
+    const { result } = renderHook(() => useDeviceMotion(true));
+
+    await waitFor(() => expect(result.current.error).toBe("Motion permission denied"));
+
+    result.current.retry();
+
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(2));
+    dispatchMotion(0, 0, 9.80665);
+
+    await waitFor(() => {
+      expect(result.current.error).toBeNull();
+      expect(result.current.value).toBeCloseTo(1, 2);
+    });
+  });
 });

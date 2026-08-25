@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import type { CardConfig } from "../theme/ThemeContext";
 import { useThemeConfig } from "../theme/ThemeContext";
@@ -6,6 +7,7 @@ import { WristTilt } from "./WristTilt";
 import { Sparkline } from "./Sparkline";
 import { FillBar } from "./FillBar";
 import { Thermometer } from "./Thermometer";
+import { useDeviceMotion } from "./useDeviceMotion";
 import { normalize, RANGES } from "./IndexCalc";
 
 const LABELS: Record<string, string> = {
@@ -60,6 +62,61 @@ function HeroReadout({ label, value, testId }: { label: string; value: number | 
   );
 }
 
+function motionToggleLabel(liveEnabled: boolean, error: string | null): string {
+  if (!liveEnabled) return "Try with your phone";
+  // iOS caches a real permission denial and won't re-show its prompt on
+  // retry — only "check your browser's site settings" actually unblocks
+  // it there, so the copy doesn't promise a retry will just work.
+  if (error) return "Motion access blocked — check your browser's site settings";
+  return "Live · tap to stop";
+}
+
+// Real hardware doesn't have an IMU wired up yet (session 15), so this
+// lets anyone try the motion tile with their own phone's tilt — a small,
+// honest stand-in for the real sensor rather than a debug-only toggle.
+function MotionTile({ label, value, testId }: { label: string; value: number | undefined; testId: string }) {
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const liveTilt = useDeviceMotion(liveEnabled);
+  const prefersReducedMotion = useReducedMotion();
+  const effectiveValue = liveEnabled && liveTilt.value !== undefined ? liveTilt.value : value;
+
+  return (
+    <motion.div
+      className={`bg-surface border-hairline flex flex-col justify-between rounded-2xl border px-4 py-3.5 ${FACET_CORNER}`}
+      data-testid={testId}
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+    >
+      <div>
+        <div className="font-sans text-[0.7rem] font-semibold tracking-[0.1em] text-white/60 uppercase">{label}</div>
+        <div className="font-mono mt-1 text-2xl font-medium [font-variant-numeric:tabular-nums]">
+          {effectiveValue !== undefined ? effectiveValue.toFixed(1) : "--"}
+          {effectiveValue !== undefined && (
+            <span className="font-sans ml-1 text-[0.7rem] text-white/50">{UNITS.imu}</span>
+          )}
+        </div>
+      </div>
+      <div>
+        <WristTilt value={effectiveValue} />
+        <button
+          type="button"
+          onClick={() => {
+            if (liveEnabled && liveTilt.error) {
+              liveTilt.retry();
+              return;
+            }
+            setLiveEnabled((prev) => !prev);
+          }}
+          className="mt-1.5 font-sans text-[0.65rem] text-white/45 underline decoration-white/20 underline-offset-2"
+        >
+          {motionToggleLabel(liveEnabled, liveTilt.error)}
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
 export function Card({ config, value }: CardProps) {
   const theme = useThemeConfig();
   const label = LABELS[config.source];
@@ -81,26 +138,7 @@ export function Card({ config, value }: CardProps) {
   }
 
   if (config.source === "imu") {
-    return (
-      <motion.div
-        className={`bg-surface border-hairline flex flex-col justify-between rounded-2xl border px-4 py-3.5 ${FACET_CORNER}`}
-        data-testid={`card-${config.source}`}
-        initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
-        <div>
-          <div className="font-sans text-[0.7rem] font-semibold tracking-[0.1em] text-white/60 uppercase">
-            {label}
-          </div>
-          <div className="font-mono mt-1 text-2xl font-medium [font-variant-numeric:tabular-nums]">
-            {value !== undefined ? value.toFixed(1) : "--"}
-            {value !== undefined && <span className="font-sans ml-1 text-[0.7rem] text-white/50">{UNITS.imu}</span>}
-          </div>
-        </div>
-        <WristTilt value={value} />
-      </motion.div>
-    );
+    return <MotionTile label={label} value={value} testId={`card-${config.source}`} />;
   }
 
   const range = RANGES[config.source as keyof typeof RANGES];
