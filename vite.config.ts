@@ -45,7 +45,7 @@ function themeEditorSavePlugin(): Plugin {
 }
 
 export default defineConfig({
-  base: "/sweatsalt-app/",
+  base: "/CreatED-Aavika-Kishnani-SWEATSALT-App/",
   plugins: [
     react(),
     tailwindcss(),
@@ -59,8 +59,8 @@ export default defineConfig({
         theme_color: "#15110c",
         background_color: "#15110c",
         display: "standalone",
-        start_url: "/sweatsalt-app/",
-        scope: "/sweatsalt-app/",
+        start_url: "/CreatED-Aavika-Kishnani-SWEATSALT-App/",
+        scope: "/CreatED-Aavika-Kishnani-SWEATSALT-App/",
         icons: [
           { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },

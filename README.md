@@ -33,10 +33,10 @@ git commit -m "your change"
 git push
 ```
 
-Pushing to `main` triggers the GitHub Actions workflow, which builds
+Pushing to `master` triggers the GitHub Actions workflow, which builds
 and publishes to GitHub Pages at:
 
-https://<your-github-username>.github.io/sweatsalt-app/
+https://kushal-chandar.github.io/CreatED-Aavika-Kishnani-SWEATSALT-App/
 
 ## Project structure
 
