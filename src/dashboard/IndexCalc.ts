@@ -11,13 +11,13 @@ export interface SensorSnapshot {
 // "Heat-stress index (placeholder)" section.
 const WEIGHTS = { gsr: 0.4, hr: 0.3, temp: 0.3 };
 
-const RANGES = {
+export const RANGES = {
   gsr: { min: 0.2, max: 20 },
   hr: { min: 50, max: 180 },
   temp: { min: 30, max: 39 },
 };
 
-function normalize(value: number, min: number, max: number): number {
+export function normalize(value: number, min: number, max: number): number {
   const clamped = Math.min(max, Math.max(min, value));
   return (clamped - min) / (max - min);
 }

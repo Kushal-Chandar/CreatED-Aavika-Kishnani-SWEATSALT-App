@@ -15,7 +15,7 @@ export function WristTilt({ value }: WristTiltProps) {
   const prefersReducedMotion = useReducedMotion();
 
   return (
-    <div className="mt-1.5 flex min-h-14 flex-1 items-center justify-center [perspective:400px]">
+    <div className="flex min-h-14 flex-1 items-center justify-center [perspective:400px]">
       <motion.div
         className="border-hairline relative h-[26px] w-[60px] rounded-lg border bg-[linear-gradient(135deg,rgba(237,230,214,0.14),rgba(237,230,214,0.04))] [transform-style:preserve-3d]"
         data-testid="wrist-tilt-band"

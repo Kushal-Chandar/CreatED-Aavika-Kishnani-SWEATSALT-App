@@ -7,6 +7,7 @@ import { SaltDivider } from "./SaltDivider";
 import { BatteryPill } from "./BatteryPill";
 import { computeHeatIndex } from "./IndexCalc";
 import { appendEntry, pruneOldEntries } from "../log/logStore";
+import { useDeviceMotion } from "./useDeviceMotion";
 
 interface DashboardProps {
   dataSource: DataSource;
@@ -23,6 +24,8 @@ export function Dashboard({ dataSource }: DashboardProps) {
   const [battery, setBattery] = useState<number | undefined>(undefined);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | undefined>(undefined);
   const [booted, setBooted] = useState(false);
+  const [liveTiltEnabled, setLiveTiltEnabled] = useState(false);
+  const liveTilt = useDeviceMotion(liveTiltEnabled);
   const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -69,6 +72,13 @@ export function Dashboard({ dataSource }: DashboardProps) {
   const heroCards = sortedCards.filter((c) => c.size === "large");
   const tileCards = sortedCards.filter((c) => c.size !== "large");
 
+  function valueFor(source: string): number | undefined {
+    if (source === "imu" && liveTiltEnabled && liveTilt.value !== undefined) {
+      return liveTilt.value;
+    }
+    return values[source as SensorSource];
+  }
+
   return (
     <div
       className="relative flex min-h-dvh items-center justify-center overflow-x-hidden font-sans"
@@ -94,7 +104,7 @@ export function Dashboard({ dataSource }: DashboardProps) {
         )}
       </AnimatePresence>
 
-      <div className="w-full max-w-[640px] px-5 py-6 max-[420px]:px-3.5">
+      <div className="relative w-full max-w-[640px] px-5 py-6 max-[420px]:px-3.5">
         <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="font-mono text-lg font-bold tracking-wider">
@@ -130,15 +140,25 @@ export function Dashboard({ dataSource }: DashboardProps) {
           )}
         </AnimatePresence>
         {heroCards.map((card) => (
-          <Card key={card.source} config={card} value={values[card.source as SensorSource]} />
+          <Card key={card.source} config={card} value={valueFor(card.source)} />
         ))}
         {heroCards.length > 0 && tileCards.length > 0 && <SaltDivider />}
         <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3">
           {tileCards.map((card) => (
-            <Card key={card.source} config={card} value={values[card.source as SensorSource]} />
+            <Card key={card.source} config={card} value={valueFor(card.source)} />
           ))}
         </div>
       </div>
+
+      {import.meta.env.DEV && (
+        <button
+          type="button"
+          onClick={() => setLiveTiltEnabled((prev) => !prev)}
+          className="bg-surface border-hairline fixed bottom-4 left-4 z-50 rounded-full border px-4 py-2 font-sans text-[0.85rem] text-[#ede6d6]"
+        >
+          {liveTiltEnabled ? (liveTilt.error ?? "Tilt: live (tap to stop)") : "Tilt: mock (tap to use device)"}
+        </button>
+      )}
     </div>
   );
 }
