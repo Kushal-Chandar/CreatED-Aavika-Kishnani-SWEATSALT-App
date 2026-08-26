@@ -10,13 +10,14 @@ import { appendEntry, pruneOldEntries } from "../log/logStore";
 
 interface DashboardProps {
   dataSource: DataSource;
+  onConnectDevice?: () => void;
 }
 
 type ValueMap = Partial<Record<SensorSource, number>>;
 
 const SPLASH_MS = 900;
 
-export function Dashboard({ dataSource }: DashboardProps) {
+export function Dashboard({ dataSource, onConnectDevice }: DashboardProps) {
   const theme = useThemeConfig();
   const [values, setValues] = useState<ValueMap>({});
   const [status, setStatus] = useState<ConnectionStatus>("connected");
@@ -106,10 +107,21 @@ export function Dashboard({ dataSource }: DashboardProps) {
           </div>
           <div className="flex flex-col items-end gap-1">
             <BatteryPill percent={battery} />
-            {deviceInfo && (
+            {deviceInfo ? (
               <div className="font-sans text-[0.65rem] text-white/40">
                 {deviceInfo.name} <span className="font-mono">· {deviceInfo.id}</span>
               </div>
+            ) : (
+              onConnectDevice && (
+                <button
+                  type="button"
+                  onClick={onConnectDevice}
+                  data-testid="connect-device-button"
+                  className="font-sans text-[0.65rem] text-white/45 underline decoration-white/20 underline-offset-2"
+                >
+                  Connect device
+                </button>
+              )
             )}
           </div>
         </header>

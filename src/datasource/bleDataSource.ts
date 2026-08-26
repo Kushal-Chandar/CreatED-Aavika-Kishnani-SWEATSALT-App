@@ -19,12 +19,18 @@ export class BleDataSource implements DataSource {
 
   async start(): Promise<void> {
     try {
-      this.device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-      });
-      this.device.addEventListener("gattserverdisconnected", () => {
-        this.emitStatus("disconnected");
-      });
+      if (!this.device) {
+        this.device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+        });
+        this.device.addEventListener("gattserverdisconnected", () => {
+          this.emitStatus("disconnected");
+        });
+      }
+      // Reuses the already-paired device on retry — the disconnected
+      // banner's "tap to retry" should reconnect quietly, not throw a
+      // new browser device-picker dialog at someone whose watch just
+      // walked out of range for a second.
       await this.device.gatt?.connect();
       this.emitStatus("connected");
       // Characteristic subscription (session 15): once firmware's GATT

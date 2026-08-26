@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { Dashboard } from "./Dashboard";
 import { ThemeProvider } from "../theme/ThemeContext";
 import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "../datasource/types";
@@ -7,6 +7,7 @@ import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "../datas
 class FakeDataSource implements DataSource {
   private readingCb: ((r: Reading) => void) | null = null;
   private statusCb: ((s: ConnectionStatus) => void) | null = null;
+  private deviceInfoCb: ((info: DeviceInfo) => void) | null = null;
 
   start(): void {
     this.statusCb?.("connected");
@@ -18,13 +19,18 @@ class FakeDataSource implements DataSource {
   onStatusChange(cb: (s: ConnectionStatus) => void): void {
     this.statusCb = cb;
   }
-  onDeviceInfo(_cb: (info: DeviceInfo) => void): void {}
+  onDeviceInfo(cb: (info: DeviceInfo) => void): void {
+    this.deviceInfoCb = cb;
+  }
   onBattery(_cb: (percent: number) => void): void {}
   emit(reading: Reading): void {
     this.readingCb?.(reading);
   }
   disconnect(): void {
     this.statusCb?.("disconnected");
+  }
+  reportDeviceInfo(info: DeviceInfo): void {
+    this.deviceInfoCb?.(info);
   }
 }
 
@@ -76,5 +82,33 @@ describe("Dashboard", () => {
       source.disconnect();
     });
     expect(screen.getByTestId("disconnected-banner")).toBeInTheDocument();
+  });
+
+  it("shows a connect-device button when onConnectDevice is provided and no device is paired yet", () => {
+    const source = new FakeDataSource();
+    const onConnectDevice = vi.fn();
+    render(
+      <ThemeProvider>
+        <Dashboard dataSource={source} onConnectDevice={onConnectDevice} />
+      </ThemeProvider>
+    );
+
+    const button = screen.getByTestId("connect-device-button");
+    fireEvent.click(button);
+    expect(onConnectDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the connect-device button once a real device has reported its info", () => {
+    const source = new FakeDataSource();
+    render(
+      <ThemeProvider>
+        <Dashboard dataSource={source} onConnectDevice={() => {}} />
+      </ThemeProvider>
+    );
+
+    act(() => {
+      source.reportDeviceInfo({ id: "SWST-1", name: "SweatSalt" });
+    });
+    expect(screen.queryByTestId("connect-device-button")).not.toBeInTheDocument();
   });
 });
