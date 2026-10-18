@@ -130,7 +130,8 @@ unsigned long lastTempSample = 0;
 
 // Pulse pattern state machine — replaces delay()-based buzzing so alerts
 // don't stall pulse sampling or BLE.
-int           buzzRemaining = 0;   // pulses left, including the one running
+volatile int  buzzRemaining = 0;   // pulses left, including the one running
+                                   // (volatile: the BLE write callback clears it)
 int           buzzIntensity = 0;
 unsigned long buzzOnMs      = 0;
 unsigned long buzzOffMs     = 0;
@@ -154,7 +155,7 @@ void updateBuzz() {
     ledcWrite(MOTOR_PIN, 0);
     buzzIsOn = false;
     buzzChangedAt = now;
-    buzzRemaining--;
+    buzzRemaining = buzzRemaining - 1;
   } else if (!buzzIsOn && now - buzzChangedAt >= buzzOffMs) {
     ledcWrite(MOTOR_PIN, buzzIntensity);
     buzzIsOn = true;
@@ -263,20 +264,53 @@ float   batteryVoltage = 0.0;
 uint8_t batteryPct     = 0;
 
 unsigned long lastBatSample = 0;
-#define BAT_SAMPLE_MS  3000
+#define BAT_SAMPLE_MS  3000        // start a new measurement this often
+#define BAT_BURST         20       // ADC samples averaged per measurement
+#define BAT_TICK_MS        5       // gap between those samples
 
-void readBattery() {
-  uint32_t totalMv = 0;
-  for (int i = 0; i < 20; i++) {
-    totalMv += analogReadMilliVolts(BAT_PIN);
-    delay(5);
-  }
-  float avgMv    = (float)totalMv / 20.0;
+void applyBatteryMv(float avgMv) {
   batteryVoltage = (avgMv * 2.0) / 1000.0;     // ×2 for the 1:2 divider
 
   // 3.3 V empty .. 4.2 V full (Li-Ion) -> 0..100 %
   float pct = (batteryVoltage - 3.3f) / (4.2f - 3.3f) * 100.0f;
   batteryPct = (uint8_t)constrain(pct, 0.0f, 100.0f);
+}
+
+// Blocking read — only used once in setup() so the first BLE notify has a
+// value.
+void readBatteryBlocking() {
+  uint32_t totalMv = 0;
+  for (int i = 0; i < BAT_BURST; i++) {
+    totalMv += analogReadMilliVolts(BAT_PIN);
+    delay(BAT_TICK_MS);
+  }
+  applyBatteryMv((float)totalMv / BAT_BURST);
+}
+
+// Non-blocking read for loop(): takes one ADC sample per BAT_TICK_MS instead
+// of sitting in a 100 ms delay loop, which would miss pulse samples (and so
+// distort BPM) every few seconds.
+void updateBattery(unsigned long now) {
+  static bool          bursting = false;
+  static unsigned long lastTick = 0;
+  static uint32_t      totalMv  = 0;
+  static int           taken    = 0;
+
+  if (!bursting) {
+    if (now - lastBatSample < BAT_SAMPLE_MS) return;
+    bursting      = true;
+    lastBatSample = now;
+    lastTick      = now - BAT_TICK_MS;       // take the first sample right away
+    totalMv       = 0;
+    taken         = 0;
+  }
+  if (now - lastTick < BAT_TICK_MS) return;
+  lastTick = now;
+  totalMv += analogReadMilliVolts(BAT_PIN);
+  if (++taken >= BAT_BURST) {
+    applyBatteryMv((float)totalMv / BAT_BURST);
+    bursting = false;
+  }
 }
 
 
@@ -499,6 +533,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
     Serial.println(F("BLE disconnected — advertising again"));
+    buzzRemaining = 0;                         // don't leave a BLE-held motor running
+    ledcWrite(MOTOR_PIN, 0);
     NimBLEDevice::startAdvertising();
   }
 };
@@ -618,7 +654,7 @@ void setup() {
   setupBle();
   Serial.println(F("BLE         advertising"));
 
-  readBattery();                               // so the first notify has a value
+  readBatteryBlocking();                       // so the first notify has a value
   buzzMotor(1, 150, 200);                      // boot buzz
   digitalWrite(USER_LED, HIGH);                // OFF: boot complete
   Serial.println(F("=== Boot complete ===\n"));
@@ -637,7 +673,7 @@ void loop() {
 
   if (now - lastPulseSample >= PULSE_SAMPLE_MS) { lastPulseSample = now; updatePulse(); }
   if (now - lastGsrSample   >= GSR_SAMPLE_MS)   { lastGsrSample   = now; readGSR(); }
-  if (now - lastBatSample   >= BAT_SAMPLE_MS)   { lastBatSample   = now; readBattery(); }
+  updateBattery(now);
   if (now - lastTempSample  >= TEMP_SAMPLE_MS)  { lastTempSample  = now; readTemperature(); }
   if (mpuOk && now - lastAccelSample >= ACCEL_SAMPLE_MS) { lastAccelSample = now; readMPU6050(); }
   if (now - lastDisplayUpdate >= DISPLAY_MS)    { lastDisplayUpdate = now; updateDisplay(); }
