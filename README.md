@@ -42,6 +42,9 @@ https://kushal-chandar.github.io/CreatED-Aavika-Kishnani-SWEATSALT-App/
 
 - `src/datasource/` — `DataSource` interface, `MockDataSource` (demo
   data), `BleDataSource` (real hardware, session 15)
+- `firmware/firmware.ino` — XIAO ESP32-C3 BLE firmware (TMP117, MPU-6050,
+  GSR, pulse, battery, OLED, motor); required libraries are listed at the top
+  of the file
 - `src/theme/theme.json` — drives colors, layout, and which sensor
   shows in which card; edit it via the dev-only theme editor (see
   above) or by hand
