@@ -49,15 +49,20 @@ export class BleDataSource implements DataSource {
       this.emitStatus("connected");
 
       if (server) {
-        // Non-fatal: the BLE link itself is up even if a particular
-        // service isn't there yet (e.g. older firmware), so a failure
-        // here shouldn't flip the connection back to "disconnected".
-        try {
-          await this.subscribeSensorReadings(server);
-          await this.readDeviceInfo(server);
-          await this.subscribeBattery(server);
-        } catch {
-          // readings just won't arrive until the device exposes them
+        // Non-fatal and independent: the BLE link itself is up even if a
+        // particular service isn't there yet (e.g. older firmware), so one
+        // missing service shouldn't flip the connection back to
+        // "disconnected" or hide the others.
+        for (const step of [
+          () => this.subscribeSensorReadings(server),
+          () => this.readDeviceInfo(server),
+          () => this.subscribeBattery(server),
+        ]) {
+          try {
+            await step();
+          } catch {
+            // that service's data just won't arrive until the device exposes it
+          }
         }
       }
     } catch {

@@ -141,10 +141,10 @@ describe("BleDataSource", () => {
     gsrChar.fireValueChanged(floatValue(42.5));
     tempChar.fireValueChanged(floatValue(36.8));
 
-    expect(readings).toEqual([
-      { source: "gsr", value: 42.5, ts: expect.any(Number) },
-      { source: "temp", value: 36.8, ts: expect.any(Number) },
-    ]);
+    // float32 can't represent 36.8 exactly, so compare approximately
+    expect(readings.map((r) => r.source)).toEqual(["gsr", "temp"]);
+    expect(readings[0].value).toBeCloseTo(42.5, 4);
+    expect(readings[1].value).toBeCloseTo(36.8, 4);
     expect(gsrChar.startNotifications).toHaveBeenCalledTimes(1);
     expect(hrChar.startNotifications).toHaveBeenCalledTimes(1);
     expect(imuChar.startNotifications).toHaveBeenCalledTimes(1);
