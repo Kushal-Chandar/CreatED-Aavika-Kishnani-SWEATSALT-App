@@ -1,6 +1,6 @@
 import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "./types";
 
-// Must stay byte-for-byte identical to the UUID defines at the top of firmware/sweatsalt_device/sweatsalt_device.ino.
+// Must stay byte-for-byte identical to the UUID defines at the top of firmware/firmware.ino.
 export const SWEATSALT_SERVICE_UUID = "5a7b0000-0001-4a6e-9c1a-000000000000";
 export const CHAR_GSR_UUID = "5a7b0000-0001-4a6e-9c1a-000000000001";
 export const CHAR_HR_UUID = "5a7b0000-0001-4a6e-9c1a-000000000002";
