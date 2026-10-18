@@ -14,8 +14,28 @@ import {
 } from "./bleDataSource";
 import type { Reading, DeviceInfo } from "./types";
 
+// Tiny EventTarget stand-in that supports several listeners per event and
+// removal, so tests can see leaked/duplicated handlers.
+function listenerRegistry() {
+  const listeners: Record<string, Set<() => void>> = {};
+  return {
+    add(event: string, cb: () => void) {
+      (listeners[event] ??= new Set()).add(cb);
+    },
+    remove(event: string, cb: () => void) {
+      listeners[event]?.delete(cb);
+    },
+    fire(event: string) {
+      [...(listeners[event] ?? [])].forEach((cb) => cb());
+    },
+    count(event: string) {
+      return listeners[event]?.size ?? 0;
+    },
+  };
+}
+
 function fakeDevice(services: Record<string, ReturnType<typeof fakeService>> = {}) {
-  const listeners: Record<string, () => void> = {};
+  const registry = listenerRegistry();
   const gatt: { connect: () => Promise<typeof gatt>; disconnect: () => void; getPrimaryService: (uuid: string | number) => Promise<unknown> } = {
     connect: vi.fn(() => Promise.resolve(gatt)) as unknown as () => Promise<typeof gatt>,
     disconnect: vi.fn(),
@@ -26,27 +46,28 @@ function fakeDevice(services: Record<string, ReturnType<typeof fakeService>> = {
     }),
   };
   return {
-    addEventListener: vi.fn((event: string, cb: () => void) => {
-      listeners[event] = cb;
-    }),
+    addEventListener: vi.fn((event: string, cb: () => void) => registry.add(event, cb)),
+    removeEventListener: vi.fn((event: string, cb: () => void) => registry.remove(event, cb)),
     gatt,
-    fireDisconnect: () => listeners["gattserverdisconnected"]?.(),
+    fireDisconnect: () => registry.fire("gattserverdisconnected"),
+    listenerCount: (event: string) => registry.count(event),
   };
 }
 
 function fakeCharacteristic() {
-  const listeners: Record<string, () => void> = {};
+  const registry = listenerRegistry();
   return {
     value: undefined as DataView | undefined,
     startNotifications: vi.fn().mockResolvedValue(undefined),
-    addEventListener: vi.fn((event: string, cb: () => void) => {
-      listeners[event] = cb;
-    }),
+    stopNotifications: vi.fn().mockResolvedValue(undefined),
+    addEventListener: vi.fn((event: string, cb: () => void) => registry.add(event, cb)),
+    removeEventListener: vi.fn((event: string, cb: () => void) => registry.remove(event, cb)),
     readValue: vi.fn().mockResolvedValue(new DataView(new ArrayBuffer(0))),
     fireValueChanged(dv: DataView) {
       this.value = dv;
-      listeners["characteristicvaluechanged"]?.();
+      registry.fire("characteristicvaluechanged");
     },
+    listenerCount: () => registry.count("characteristicvaluechanged"),
   };
 }
 
@@ -182,5 +203,134 @@ describe("BleDataSource", () => {
     battDv.setUint8(0, 73);
     batteryChar.fireValueChanged(battDv);
     expect(batteryPercent).toBe(73);
+  });
+
+  describe("listener cleanup", () => {
+    function connectedSetup() {
+      const gsrChar = fakeCharacteristic();
+      const sensorChars = {
+        [CHAR_GSR_UUID]: gsrChar,
+        [CHAR_HR_UUID]: fakeCharacteristic(),
+        [CHAR_TEMP_UUID]: fakeCharacteristic(),
+        [CHAR_IMU_UUID]: fakeCharacteristic(),
+      };
+      const batteryChar = fakeCharacteristic();
+      const device = fakeDevice({
+        [SWEATSALT_SERVICE_UUID]: fakeService(sensorChars),
+        [BATTERY_SERVICE_UUID]: fakeService({ [BATTERY_LEVEL_UUID]: batteryChar }),
+      });
+      vi.stubGlobal("navigator", {
+        bluetooth: { requestDevice: vi.fn().mockResolvedValue(device) },
+      });
+      return { device, gsrChar, batteryChar, sensorChars };
+    }
+
+    it("onReading returns an unsubscribe that stops delivery to that listener", async () => {
+      const { gsrChar } = connectedSetup();
+      const source = new BleDataSource();
+      const kept: Reading[] = [];
+      const dropped: Reading[] = [];
+      source.onReading((r) => kept.push(r));
+      const unsubscribe = source.onReading((r) => dropped.push(r));
+      await source.start();
+
+      gsrChar.fireValueChanged(floatValue(1));
+      unsubscribe();
+      gsrChar.fireValueChanged(floatValue(2));
+
+      expect(kept).toHaveLength(2);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("onStatusChange, onDeviceInfo and onBattery also return working unsubscribes", async () => {
+      const { device, batteryChar } = connectedSetup();
+      const source = new BleDataSource();
+      const statuses: string[] = [];
+      const levels: number[] = [];
+      source.onStatusChange((s) => statuses.push(s))();
+      source.onBattery((p) => levels.push(p))();
+      source.onDeviceInfo(() => {})();
+      await source.start();
+
+      device.fireDisconnect();
+      const dv = new DataView(new ArrayBuffer(1));
+      dv.setUint8(0, 50);
+      batteryChar.fireValueChanged(dv);
+
+      expect(statuses).toEqual([]);
+      expect(levels).toEqual([]);
+    });
+
+    it("stop() removes characteristic listeners and stops notifications", async () => {
+      const { gsrChar, batteryChar, sensorChars } = connectedSetup();
+      const source = new BleDataSource();
+      const readings: Reading[] = [];
+      source.onReading((r) => readings.push(r));
+      await source.start();
+      expect(gsrChar.listenerCount()).toBe(1);
+
+      source.stop();
+
+      expect(gsrChar.listenerCount()).toBe(0);
+      expect(batteryChar.listenerCount()).toBe(0);
+      for (const c of Object.values(sensorChars)) expect(c.stopNotifications).toHaveBeenCalledTimes(1);
+      expect(batteryChar.stopNotifications).toHaveBeenCalledTimes(1);
+      gsrChar.fireValueChanged(floatValue(9));
+      expect(readings).toEqual([]);
+    });
+
+    it("stop() removes the disconnect listener so no status fires after teardown", async () => {
+      const { device } = connectedSetup();
+      const source = new BleDataSource();
+      const statuses: string[] = [];
+      source.onStatusChange((s) => statuses.push(s));
+      await source.start();
+      statuses.length = 0;
+
+      source.stop();
+      device.fireDisconnect();
+
+      expect(device.listenerCount("gattserverdisconnected")).toBe(0);
+      expect(statuses).toEqual([]);
+    });
+
+    it("a retry on the same device does not stack a second set of listeners", async () => {
+      const { device, gsrChar } = connectedSetup();
+      const source = new BleDataSource();
+      const readings: Reading[] = [];
+      source.onReading((r) => readings.push(r));
+      await source.start();
+
+      device.fireDisconnect();
+      await source.start();
+      gsrChar.fireValueChanged(floatValue(3));
+
+      expect(gsrChar.listenerCount()).toBe(1);
+      expect(readings).toHaveLength(1);
+      expect(device.listenerCount("gattserverdisconnected")).toBe(1);
+    });
+
+    it("start() called while still connected does not duplicate readings", async () => {
+      const { gsrChar } = connectedSetup();
+      const source = new BleDataSource();
+      const readings: Reading[] = [];
+      source.onReading((r) => readings.push(r));
+      await source.start();
+      await source.start();
+
+      gsrChar.fireValueChanged(floatValue(3));
+
+      expect(readings).toHaveLength(1);
+    });
+
+    it("stop() before a late characteristic fails to stop does not throw", async () => {
+      const { gsrChar } = connectedSetup();
+      gsrChar.stopNotifications.mockRejectedValue(new Error("device gone"));
+      const source = new BleDataSource();
+      await source.start();
+
+      expect(() => source.stop()).not.toThrow();
+      await Promise.resolve();
+    });
   });
 });

@@ -1,4 +1,5 @@
-import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "./types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo, Unsubscribe } from "./types";
+import { addListener } from "./listeners";
 
 type MockSource = Reading["source"];
 
@@ -90,19 +91,19 @@ export class MockDataSource implements DataSource {
     this.connected = true;
   }
 
-  onReading(cb: (r: Reading) => void): void {
-    this.readingListeners.push(cb);
+  onReading(cb: (r: Reading) => void): Unsubscribe {
+    return addListener(this.readingListeners, cb);
   }
 
-  onStatusChange(cb: (s: ConnectionStatus) => void): void {
-    this.statusListeners.push(cb);
+  onStatusChange(cb: (s: ConnectionStatus) => void): Unsubscribe {
+    return addListener(this.statusListeners, cb);
   }
 
-  onDeviceInfo(cb: (info: DeviceInfo) => void): void {
-    this.deviceInfoListeners.push(cb);
+  onDeviceInfo(cb: (d: DeviceInfo) => void): Unsubscribe {
+    return addListener(this.deviceInfoListeners, cb);
   }
 
-  onBattery(cb: (percent: number) => void): void {
-    this.batteryListeners.push(cb);
+  onBattery(cb: (percent: number) => void): Unsubscribe {
+    return addListener(this.batteryListeners, cb);
   }
 }

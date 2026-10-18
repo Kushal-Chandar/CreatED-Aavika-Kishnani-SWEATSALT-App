@@ -8,21 +8,42 @@ class FakeDataSource implements DataSource {
   private readingCb: ((r: Reading) => void) | null = null;
   private statusCb: ((s: ConnectionStatus) => void) | null = null;
   private deviceInfoCb: ((info: DeviceInfo) => void) | null = null;
+  private batteryCb: ((percent: number) => void) | null = null;
+  stopCalls = 0;
 
   start(): void {
     this.statusCb?.("connected");
   }
-  stop(): void {}
-  onReading(cb: (r: Reading) => void): void {
+  stop(): void {
+    this.stopCalls += 1;
+  }
+  onReading(cb: (r: Reading) => void): () => void {
     this.readingCb = cb;
+    return () => {
+      this.readingCb = null;
+    };
   }
-  onStatusChange(cb: (s: ConnectionStatus) => void): void {
+  onStatusChange(cb: (s: ConnectionStatus) => void): () => void {
     this.statusCb = cb;
+    return () => {
+      this.statusCb = null;
+    };
   }
-  onDeviceInfo(cb: (info: DeviceInfo) => void): void {
+  onDeviceInfo(cb: (info: DeviceInfo) => void): () => void {
     this.deviceInfoCb = cb;
+    return () => {
+      this.deviceInfoCb = null;
+    };
   }
-  onBattery(_cb: (percent: number) => void): void {}
+  onBattery(cb: (percent: number) => void): () => void {
+    this.batteryCb = cb;
+    return () => {
+      this.batteryCb = null;
+    };
+  }
+  get hasListeners(): boolean {
+    return !!(this.readingCb || this.statusCb || this.deviceInfoCb || this.batteryCb);
+  }
   emit(reading: Reading): void {
     this.readingCb?.(reading);
   }
@@ -35,6 +56,41 @@ class FakeDataSource implements DataSource {
 }
 
 describe("Dashboard", () => {
+  it("unregisters every data-source listener and stops the source on unmount", () => {
+    const source = new FakeDataSource();
+    const { unmount } = render(
+      <ThemeProvider>
+        <Dashboard dataSource={source} />
+      </ThemeProvider>
+    );
+    expect(source.hasListeners).toBe(true);
+
+    unmount();
+
+    expect(source.hasListeners).toBe(false);
+    expect(source.stopCalls).toBe(1);
+  });
+
+  it("moves its listeners to the new source when the data source prop changes", () => {
+    const first = new FakeDataSource();
+    const second = new FakeDataSource();
+    const { rerender } = render(
+      <ThemeProvider>
+        <Dashboard dataSource={first} />
+      </ThemeProvider>
+    );
+
+    rerender(
+      <ThemeProvider>
+        <Dashboard dataSource={second} />
+      </ThemeProvider>
+    );
+
+    expect(first.hasListeners).toBe(false);
+    expect(first.stopCalls).toBe(1);
+    expect(second.hasListeners).toBe(true);
+  });
+
   it("renders visible cards from theme.json and updates on readings", () => {
     const source = new FakeDataSource();
     render(

@@ -41,12 +41,17 @@ export function Dashboard({ dataSource, onConnectDevice }: DashboardProps) {
       void appendEntry({ source: reading.source, value: reading.value, ts: reading.ts });
     };
 
-    dataSource.onReading(handleReading);
-    dataSource.onStatusChange(setStatus);
-    dataSource.onDeviceInfo(setDeviceInfo);
-    dataSource.onBattery(setBattery);
+    const unsubscribers = [
+      dataSource.onReading(handleReading),
+      dataSource.onStatusChange(setStatus),
+      dataSource.onDeviceInfo(setDeviceInfo),
+      dataSource.onBattery(setBattery),
+    ];
     dataSource.start();
-    return () => dataSource.stop();
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+      dataSource.stop();
+    };
   }, [dataSource]);
 
   useEffect(() => {

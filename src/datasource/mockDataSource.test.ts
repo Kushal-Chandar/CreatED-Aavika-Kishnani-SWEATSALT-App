@@ -98,4 +98,37 @@ describe("MockDataSource", () => {
     expect(levels[0]).toBeLessThanOrEqual(100);
     expect(levels[2]).toBeLessThanOrEqual(levels[0]);
   });
+
+  it("returns unsubscribe functions from every onX registration", () => {
+    const source = new MockDataSource();
+    const readings: Reading[] = [];
+    const statuses: ConnectionStatus[] = [];
+    const levels: number[] = [];
+    source.onReading((r) => readings.push(r))();
+    source.onStatusChange((s) => statuses.push(s))();
+    source.onBattery((p) => levels.push(p))();
+    source.onDeviceInfo(() => levels.push(-1))();
+
+    source.start();
+    vi.advanceTimersByTime(2000);
+
+    expect(readings).toEqual([]);
+    expect(statuses).toEqual([]);
+    expect(levels).toEqual([]);
+  });
+
+  it("only removes the listener that was unsubscribed", () => {
+    const source = new MockDataSource();
+    const a: Reading[] = [];
+    const b: Reading[] = [];
+    const unsubA = source.onReading((r) => a.push(r));
+    source.onReading((r) => b.push(r));
+    unsubA();
+
+    source.start();
+    vi.advanceTimersByTime(1000);
+
+    expect(a).toEqual([]);
+    expect(b.length).toBeGreaterThan(0);
+  });
 });
