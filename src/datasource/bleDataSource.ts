@@ -9,11 +9,27 @@ export const CHAR_TEMP_UUID = "5a7b0000-0001-4a6e-9c1a-000000000003";
 export const CHAR_IMU_UUID = "5a7b0000-0001-4a6e-9c1a-000000000004";
 export const CHAR_VIBRATION_UUID = "5a7b0000-0001-4a6e-9c1a-000000000005";
 export const CHAR_ALERT_UUID = "5a7b0000-0001-4a6e-9c1a-000000000007";
-export const DEVICE_INFO_SERVICE_UUID = 0x180a;
-export const MODEL_NUMBER_UUID = 0x2a24;
-export const SERIAL_NUMBER_UUID = 0x2a25;
-export const BATTERY_SERVICE_UUID = 0x180f;
-export const BATTERY_LEVEL_UUID = 0x2a19;
+// Standard 16-bit services as full 128-bit strings. The spec also accepts bare
+// numbers (0x180a), but wrappers like Bluefy only reliably take strings.
+export const DEVICE_INFO_SERVICE_UUID = "0000180a-0000-1000-8000-00805f9b34fb";
+export const MODEL_NUMBER_UUID = "00002a24-0000-1000-8000-00805f9b34fb";
+export const SERIAL_NUMBER_UUID = "00002a25-0000-1000-8000-00805f9b34fb";
+export const BATTERY_SERVICE_UUID = "0000180f-0000-1000-8000-00805f9b34fb";
+export const BATTERY_LEVEL_UUID = "00002a19-0000-1000-8000-00805f9b34fb";
+
+// Bluefy and friends sometimes reject with a bare code or object rather than
+// an Error, so show whatever it is instead of "[object Object]" or nothing.
+function describeError(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  if (typeof err === "object" && err !== null) {
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return Object.prototype.toString.call(err);
+    }
+  }
+  return `non-Error rejection: ${String(err)}`;
+}
 
 const SENSOR_CHARACTERISTICS: Array<[BluetoothCharacteristicUUID, Reading["source"]]> = [
   [CHAR_GSR_UUID, "gsr"],
@@ -146,7 +162,7 @@ export class BleDataSource implements DataSource {
         }
       }
     } catch (err: unknown) {
-      this.lastError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      this.lastError = describeError(err);
       this.emitStatus("disconnected");
     }
   }
