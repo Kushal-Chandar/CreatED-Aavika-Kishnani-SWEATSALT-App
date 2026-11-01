@@ -1,9 +1,10 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { Dashboard } from "./dashboard/Dashboard";
 import { InstallPrompt } from "./dashboard/InstallPrompt";
 import { MockDataSource } from "./datasource/mockDataSource";
 import { BleDataSource } from "./datasource/bleDataSource";
+import type { DataSource } from "./datasource/types";
 import { isWebBluetoothSupported } from "./datasource/webBluetoothSupport";
 
 // Dev-only: excluded from the production bundle because this dynamic
@@ -15,20 +16,25 @@ const ThemeEditorPanel = import.meta.env.DEV
   : null;
 
 export function App() {
-  const [useBle, setUseBle] = useState(false);
-  // requestDevice() needs to fire from this tap's own call stack, so the
-  // Dashboard button flips this flag directly rather than going through
-  // an async wrapper — the resulting effect-driven `dataSource.start()`
-  // is still inside the same user gesture (same pattern useDeviceMotion
-  // already relies on for iOS's motion-permission prompt).
-  const dataSource = useMemo(() => (useBle ? new BleDataSource() : new MockDataSource()), [useBle]);
+  const [dataSource, setDataSource] = useState<DataSource>(() => new MockDataSource());
+  const useBle = dataSource instanceof BleDataSource;
+
+  // requestDevice() must be called from the tap's own call stack — browsers
+  // (iOS Bluefy especially) refuse the picker otherwise, even a tick later
+  // from a React effect. So start() runs right here; the Dashboard's effect
+  // calling start() again just shares the in-flight attempt.
+  const connectDevice = () => {
+    const ble = new BleDataSource();
+    void ble.start();
+    setDataSource(ble);
+  };
 
   return (
     <ThemeProvider>
       <Dashboard
         dataSource={dataSource}
-        onConnectDevice={!useBle && isWebBluetoothSupported() ? () => setUseBle(true) : undefined}
-        onDisconnectDevice={useBle ? () => setUseBle(false) : undefined}
+        onConnectDevice={!useBle && isWebBluetoothSupported() ? connectDevice : undefined}
+        onDisconnectDevice={useBle ? () => setDataSource(new MockDataSource()) : undefined}
       />
       <InstallPrompt />
       {ThemeEditorPanel && (

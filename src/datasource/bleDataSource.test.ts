@@ -140,6 +140,55 @@ describe("BleDataSource", () => {
     expect(requestDevice).toHaveBeenCalledTimes(2);
   });
 
+  it("opens the picker synchronously and shares one in-flight start", async () => {
+    const device = fakeDevice();
+    const requestDevice = vi.fn().mockResolvedValue(device);
+    vi.stubGlobal("navigator", { bluetooth: { requestDevice } });
+
+    const source = new BleDataSource();
+    const first = source.start();
+    expect(requestDevice).toHaveBeenCalledTimes(1); // before any await
+    const second = source.start();
+    await Promise.all([first, second]);
+
+    expect(requestDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the error and lists all devices on the next try when the filtered picker fails", async () => {
+    const device = fakeDevice();
+    const requestDevice = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("filters unsupported"), { name: "TypeError" }))
+      .mockResolvedValueOnce(device);
+    vi.stubGlobal("navigator", { bluetooth: { requestDevice } });
+
+    const source = new BleDataSource();
+    const statuses: string[] = [];
+    source.onStatusChange((s) => statuses.push(s));
+
+    await source.start();
+    expect(statuses).toEqual(["disconnected"]);
+    expect(source.lastError).toBe("TypeError: filters unsupported");
+    expect(requestDevice.mock.calls[0][0]).toHaveProperty("filters");
+
+    await source.start();
+    expect(requestDevice.mock.calls[1][0]).toMatchObject({ acceptAllDevices: true });
+    expect(statuses).toEqual(["disconnected", "connected"]);
+  });
+
+  it("keeps the filtered picker after the user simply cancels", async () => {
+    const requestDevice = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("User cancelled"), { name: "NotFoundError" }));
+    vi.stubGlobal("navigator", { bluetooth: { requestDevice } });
+
+    const source = new BleDataSource();
+    await source.start();
+    await source.start();
+
+    expect(requestDevice.mock.calls[1][0]).toHaveProperty("filters");
+  });
+
   it("subscribes to the custom SweatSalt characteristics and forwards notified values as Readings", async () => {
     const gsrChar = fakeCharacteristic();
     const hrChar = fakeCharacteristic();

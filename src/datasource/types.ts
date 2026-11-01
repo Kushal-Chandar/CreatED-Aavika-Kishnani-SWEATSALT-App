@@ -26,6 +26,8 @@ export interface DeviceInfo {
 export type Unsubscribe = () => void;
 
 export interface DataSource {
+  // Real hardware only: why the last connection attempt failed.
+  readonly lastError?: string;
   start(): void;
   stop(): void;
   onReading(cb: (reading: Reading) => void): Unsubscribe;

@@ -67,26 +67,52 @@ export class BleDataSource implements DataSource {
     }
   }
 
-  async start(): Promise<void> {
+  // Why the last start() failed, for the UI ("NotAllowedError: ..."). The
+  // browser picker's own errors are otherwise invisible on a phone.
+  lastError: string | undefined;
+  // In-flight start(), so a second caller (e.g. the Dashboard effect running
+  // right after the tap handler already started us) shares it instead of
+  // opening a second picker.
+  private starting: Promise<void> | null = null;
+  // After a filtered picker fails for a reason other than "cancelled", the
+  // next tap lists every nearby device instead.
+  private showAllDevices = false;
+
+  // Web Bluetooth only allows the picker straight from a tap, and some
+  // browsers (Bluefy/iOS) are strict about it. So requestDevice() is the
+  // first thing that runs, synchronously, and there is exactly one picker
+  // call per start() — no await before it, no second call after it.
+  start(): Promise<void> {
+    this.starting ??= this.connect().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private async connect(): Promise<void> {
+    this.lastError = undefined;
     try {
       if (!this.device) {
+        const optionalServices = [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID];
+        const picker = navigator.bluetooth.requestDevice(
+          this.showAllDevices
+            ? { acceptAllDevices: true, optionalServices }
+            : {
+                filters: [
+                  { name: "SweatSalt" },
+                  { namePrefix: "SweatSalt" },
+                  { services: [SWEATSALT_SERVICE_UUID] },
+                ],
+                optionalServices,
+              },
+        );
         try {
-          this.device = await navigator.bluetooth.requestDevice({
-            filters: [
-              { name: "SweatSalt" },
-              { namePrefix: "SweatSalt" },
-              { services: [SWEATSALT_SERVICE_UUID] },
-            ],
-            optionalServices: [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID],
-          });
+          this.device = await picker;
         } catch (err: unknown) {
-          if (err instanceof Error && (err.name === "NotFoundError" || err.message?.includes("User cancelled"))) {
-            throw err;
-          }
-          this.device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID],
-          });
+          const cancelled =
+            err instanceof Error && (err.name === "NotFoundError" || err.message?.includes("User cancelled"));
+          if (!cancelled) this.showAllDevices = true;
+          throw err;
         }
         this.device.addEventListener("gattserverdisconnected", this.handleGattDisconnected);
       }
@@ -119,7 +145,8 @@ export class BleDataSource implements DataSource {
           }
         }
       }
-    } catch {
+    } catch (err: unknown) {
+      this.lastError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       this.emitStatus("disconnected");
     }
   }

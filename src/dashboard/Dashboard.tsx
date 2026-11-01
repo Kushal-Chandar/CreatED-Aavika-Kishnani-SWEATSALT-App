@@ -165,6 +165,11 @@ export function Dashboard({ dataSource, onConnectDevice, onDisconnectDevice }: D
               whileTap={{ scale: 0.98 }}
             >
               Disconnected — tap to retry
+              {dataSource.lastError && (
+                <div className="mt-0.5 text-[0.65rem] font-normal opacity-80" data-testid="connect-error">
+                  {dataSource.lastError}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
