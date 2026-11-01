@@ -13,27 +13,16 @@
 //      4. NimBLE-Arduino, 2.x                 (BLE)
 //    The MPU-6050 is read over raw I2C (Wire) — no library needed.
 //
-//  Built from the tested sketches in Downloads.zip (battery, GSR, heart rate,
-//  MPU, OLED, TMP117, vibration motor), which are the final sensor decisions.
-//  Those sketches reuse some pins (HR and battery both on D2, GSR and motor
-//  both on GPIO3), so the pin map below resolves the clashes. BLE is added
-//  for the SweatSalt PWA.
-//
 //  PIN MAP:
 //    D0  GPIO2   Heart rate (analog)
 //    D1  GPIO3   GSR (analog)
 //    D2  GPIO4   Battery divider (analog, 1:2)
-//    D3  GPIO5   Push-button (INPUT_PULLUP) — cycles OLED page
+//    D3  GPIO5   Push-button to GND (INPUT_PULLUP, active-low)
+//                short press = dismiss alert / next screen, long = watch face
 //    D4  GPIO6   I2C SDA  — OLED 0x3D, MPU-6050 0x68, TMP117 0x48
 //    D5  GPIO7   I2C SCL
 //    D6  GPIO21  Vibration motor (PWM, via driver)
-//    D10 GPIO10  User LED (active-low)
-//
-//  BLE contract with the app (src/datasource/bleDataSource.ts) — UUIDs below
-//  must stay byte-for-byte identical. Sensor characteristics are NOTIFY,
-//  4-byte float32 little-endian:
-//    gsr  = microsiemens   hr = bpm   temp = degC   imu = accel magnitude (g)
-//  plus Device Information (0x180A) and Battery (0x180F, percent).
+//    D10 GPIO10  User LED (active-high)
 // =============================================================================
 
 #include <Wire.h>
@@ -47,12 +36,12 @@
 //  PIN DEFINITIONS
 // =============================================================================
 
-#define PULSE_PIN   D0    // Heart Rate sensor — analog (ADC1 CH2, GPIO2)
-#define GSR_PIN     D1    // GSR sensor        — analog (ADC1 CH3, GPIO3)
-#define BAT_PIN     D2    // Battery sense     — analog (ADC1 CH4, GPIO4)
-#define SWITCH_PIN  D3    // Push-button       — digital, pull-up
-#define MOTOR_PIN   D6    // Vibration motor   — PWM (GPIO21)
-#define USER_LED    D10   // User LED          — LOW = ON
+#define PULSE_PIN   D0
+#define GSR_PIN     D1
+#define BAT_PIN     D2
+#define BUTTON_PIN  D3    // push-button to GND, internal pull-up (active-low)
+#define MOTOR_PIN   D6
+#define USER_LED    D10
 
 
 // =============================================================================
@@ -61,18 +50,32 @@
 
 #define BLE_DEVICE_NAME   "SweatSalt"
 #define BLE_MANUFACTURER  "SweatSalt Project"
-#define BLE_MODEL_NUMBER  "SS-MVP-1"      // app shows this as the device name
+#define BLE_MODEL_NUMBER  "SS-MVP-1"      
 
 #define SWEATSALT_SERVICE_UUID "5a7b0000-0001-4a6e-9c1a-000000000000"
 #define CHAR_GSR_UUID          "5a7b0000-0001-4a6e-9c1a-000000000001"
 #define CHAR_HR_UUID           "5a7b0000-0001-4a6e-9c1a-000000000002"
 #define CHAR_TEMP_UUID         "5a7b0000-0001-4a6e-9c1a-000000000003"
 #define CHAR_IMU_UUID          "5a7b0000-0001-4a6e-9c1a-000000000004"
-// Not used by the app yet: write one byte 0-255 to set motor PWM (0 = off).
-#define CHAR_VIBRATION_UUID    "5a7b0000-0001-4a6e-9c1a-000000000005"
+#define CHAR_VIBRATION_UUID    "5a7b0000-0001-4a6e-9c1a-000000000005"  // WRITE: 1 byte PWM 0-255
+#define CHAR_TIME_UUID         "5a7b0000-0001-4a6e-9c1a-000000000006"  // WRITE: uint32 LE local epoch s
+#define CHAR_ALERT_UUID        "5a7b0000-0001-4a6e-9c1a-000000000007"  // READ|NOTIFY: 1 byte AlertType
 
 NimBLEServer         *bleServer;
-NimBLECharacteristic *gsrChar, *hrChar, *tempChar, *imuChar, *batteryChar;
+NimBLECharacteristic *gsrChar, *hrChar, *tempChar, *imuChar, *batteryChar, *alertChar;
+
+
+// =============================================================================
+//  ALERT TYPE ENUM (Moved up here so the compiler sees it early)
+// =============================================================================
+
+enum AlertType {
+  ALERT_NONE = 0,
+  ALERT_FEVER,
+  ALERT_HIGH_HR,
+  ALERT_LOW_HR,
+  ALERT_BATTERY
+};
 
 
 // =============================================================================
@@ -88,8 +91,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledOk = false;
 
 unsigned long lastDisplayUpdate = 0;
-#define DISPLAY_MS  200            // ~5 Hz: a full redraw is slow on I2C and
-                                   // must not starve the 20 ms pulse sampling
+#define DISPLAY_MS  120            // ~8 fps: smooth enough, light on the pulse sampler
 
 
 // =============================================================================
@@ -101,17 +103,17 @@ unsigned long lastDisplayUpdate = 0;
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
 bool    mpuOk = false;
-float   accelG = NAN;              // accel magnitude in g (±2 g range, 16384 LSB/g)
+float   accelG = NAN;              
 
 unsigned long lastAccelSample = 0;
-#define ACCEL_SAMPLE_MS  100       // 10 Hz (also the IMU notify rate)
+#define ACCEL_SAMPLE_MS  100       
 
 
 // =============================================================================
 //  TMP117
 // =============================================================================
 
-TMP117 tempSensor;                 // address 0x48
+TMP117 tempSensor;                 
 bool   tempOk = false;
 
 float tempC = NAN;
@@ -128,10 +130,7 @@ unsigned long lastTempSample = 0;
 #define PWM_FREQ        1000
 #define PWM_RESOLUTION     8
 
-// Pulse pattern state machine — replaces delay()-based buzzing so alerts
-// don't stall pulse sampling or BLE.
-volatile int  buzzRemaining = 0;   // pulses left, including the one running
-                                   // (volatile: the BLE write callback clears it)
+volatile int  buzzRemaining = 0;   
 int           buzzIntensity = 0;
 unsigned long buzzOnMs      = 0;
 unsigned long buzzOffMs     = 0;
@@ -165,17 +164,51 @@ void updateBuzz() {
 
 
 // =============================================================================
+//  HISTORY BUFFERS, CLOCK, LED
+// =============================================================================
+
+#define WAVE_LEN  128                  // pulse waveform: 128 samples @ 50 Hz
+uint8_t waveBuf[WAVE_LEN] = {0};
+int     waveIdx = 0;
+
+#define ACC_LEN  64                    // motion history: 64 samples @ 10 Hz
+float accBuf[ACC_LEN] = {0};
+int   accIdx = 0;
+float activityEma = 0.0f;              // smoothed |a| - 1 g
+
+// The watch has no RTC: the app writes local epoch seconds over BLE on
+// connect and we count on from there. Until then it runs from boot (00:00).
+volatile uint32_t timeBaseSec = 0;
+volatile uint32_t timeBaseMs  = 0;
+volatile bool     timeSynced  = false;
+
+uint32_t localEpoch() { return timeBaseSec + (millis() - timeBaseMs) / 1000UL; }
+
+#define LED_ON   HIGH
+#define LED_OFF  LOW
+unsigned long ledOffAt = 0;            // flashes briefly on every detected beat
+
+void flashLed(unsigned long ms = 40) {
+  digitalWrite(USER_LED, LED_ON);
+  ledOffAt = millis() + ms;
+}
+
+void updateLed() {
+  if (ledOffAt && (long)(millis() - ledOffAt) >= 0) {
+    digitalWrite(USER_LED, LED_OFF);
+    ledOffAt = 0;
+  }
+}
+
+
+// =============================================================================
 //  HEART RATE / PULSE DETECTION
 // =============================================================================
-//
-//  Rising-edge threshold crossing, averaged over the last BPM_HISTORY_SIZE
-//  intervals. If no beat arrives for PULSE_TIMEOUT_MS (finger off) the BPM is
-//  marked invalid again so stale values aren't shown, buzzed on or sent.
 
-#define PULSE_SAMPLE_MS     20     // 50 Hz
-#define PULSE_THRESHOLD   2048     // 12-bit mid-point; tune to your waveform
-#define MIN_BEAT_MS        300     // ~200 BPM max
-#define MAX_BEAT_MS       1500     // ~40 BPM min; longer gap restarts the average
+#define PULSE_SAMPLE_MS     20     
+#define PULSE_THRESHOLD   2048     
+#define MIN_BEAT_MS        300     
+#define MAX_BEAT_MS       1500     
 #define PULSE_TIMEOUT_MS  3000
 #define BPM_HISTORY_SIZE     5
 
@@ -184,7 +217,7 @@ int  bpm           = 0;
 bool bpmValid      = false;
 bool pulseBeatHigh = false;
 
-unsigned long lastBeatTime = 0;    // 0 = no beat seen yet
+unsigned long lastBeatTime = 0;    
 unsigned long beatIntervals[BPM_HISTORY_SIZE] = {0};
 int  beatIndex = 0;
 
@@ -194,13 +227,17 @@ void updatePulse() {
   pulseRaw = analogRead(PULSE_PIN);
   unsigned long now = millis();
 
+  waveBuf[waveIdx] = (uint8_t)(pulseRaw >> 6);     // 12-bit -> 0..63
+  waveIdx = (waveIdx + 1) % WAVE_LEN;
+
   if (pulseRaw > PULSE_THRESHOLD && !pulseBeatHigh) {
     pulseBeatHigh = true;
+    flashLed();
 
     if (lastBeatTime != 0) {
       unsigned long interval = now - lastBeatTime;
       if (interval > MAX_BEAT_MS) {
-        beatIndex = 0;                         // too slow: start averaging over
+        beatIndex = 0;                         
       } else if (interval > MIN_BEAT_MS) {
         beatIntervals[beatIndex % BPM_HISTORY_SIZE] = interval;
         beatIndex++;
@@ -211,7 +248,7 @@ void updatePulse() {
           bpmValid = true;
         }
       } else {
-        return;                                // double-detection: ignore
+        return;                                
       }
     }
     lastBeatTime = now;
@@ -242,13 +279,9 @@ void readGSR() {
   gsrRaw     = analogRead(GSR_PIN);
   gsrVoltage = (gsrRaw / 4095.0) * 3.3;
 
-  // Skin conductance for the app. Grove GSR divider formula scaled to a
-  // 12-bit ADC (ratio-based, so supply-independent). Uncalibrated estimate:
-  // trends are meaningful, absolute µS needs calibrating against known
-  // resistors.
   float denom = 2048.0f - gsrRaw;
   if (denom <= 1.0f) {
-    gsrMicrosiemens = 0.0f;                    // open circuit: not on skin
+    gsrMicrosiemens = 0.0f;                    
   } else {
     float ohms = ((4096.0f + 2.0f * gsrRaw) * 10000.0f) / denom;
     gsrMicrosiemens = 1000000.0f / ohms;
@@ -264,20 +297,16 @@ float   batteryVoltage = 0.0;
 uint8_t batteryPct     = 0;
 
 unsigned long lastBatSample = 0;
-#define BAT_SAMPLE_MS  3000        // start a new measurement this often
-#define BAT_BURST         20       // ADC samples averaged per measurement
-#define BAT_TICK_MS        5       // gap between those samples
+#define BAT_SAMPLE_MS  3000        
+#define BAT_BURST         20       
+#define BAT_TICK_MS        5       
 
 void applyBatteryMv(float avgMv) {
-  batteryVoltage = (avgMv * 2.0) / 1000.0;     // ×2 for the 1:2 divider
-
-  // 3.3 V empty .. 4.2 V full (Li-Ion) -> 0..100 %
+  batteryVoltage = (avgMv * 2.0) / 1000.0;     
   float pct = (batteryVoltage - 3.3f) / (4.2f - 3.3f) * 100.0f;
   batteryPct = (uint8_t)constrain(pct, 0.0f, 100.0f);
 }
 
-// Blocking read — only used once in setup() so the first BLE notify has a
-// value.
 void readBatteryBlocking() {
   uint32_t totalMv = 0;
   for (int i = 0; i < BAT_BURST; i++) {
@@ -287,9 +316,6 @@ void readBatteryBlocking() {
   applyBatteryMv((float)totalMv / BAT_BURST);
 }
 
-// Non-blocking read for loop(): takes one ADC sample per BAT_TICK_MS instead
-// of sitting in a 100 ms delay loop, which would miss pulse samples (and so
-// distort BPM) every few seconds.
 void updateBattery(unsigned long now) {
   static bool          bursting = false;
   static unsigned long lastTick = 0;
@@ -300,7 +326,7 @@ void updateBattery(unsigned long now) {
     if (now - lastBatSample < BAT_SAMPLE_MS) return;
     bursting      = true;
     lastBatSample = now;
-    lastTick      = now - BAT_TICK_MS;       // take the first sample right away
+    lastTick      = now - BAT_TICK_MS;       
     totalMv       = 0;
     taken         = 0;
   }
@@ -322,7 +348,7 @@ void readMPU6050() {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x3B);
   Wire.endTransmission(false);
-  if (Wire.requestFrom(MPU_ADDR, 6, true) != 6) return;   // keep last values
+  if (Wire.requestFrom(MPU_ADDR, 6, true) != 6) return;   
   ax = (Wire.read() << 8) | Wire.read();
   ay = (Wire.read() << 8) | Wire.read();
   az = (Wire.read() << 8) | Wire.read();
@@ -338,6 +364,11 @@ void readMPU6050() {
 
   float x = ax / 16384.0f, y = ay / 16384.0f, z = az / 16384.0f;
   accelG = sqrtf(x * x + y * y + z * z);
+
+  float dev = fabsf(accelG - 1.0f);
+  accBuf[accIdx] = dev;
+  accIdx = (accIdx + 1) % ACC_LEN;
+  activityEma += 0.2f * (dev - activityEma);
 }
 
 void readTemperature() {
@@ -349,176 +380,570 @@ void readTemperature() {
 
 
 // =============================================================================
-//  ALERTS (haptic)
-// =============================================================================
-
-#define BPM_HIGH_ALERT   110
-#define BPM_LOW_ALERT     50
-#define TEMP_FEVER_C    37.8
-
-unsigned long lastAlertCheck = 0;
-#define ALERT_CHECK_MS  5000
-
-bool feverNow() { return !isnan(tempC) && tempC > TEMP_FEVER_C && tempC < 45.0; }
-
-void checkAlerts() {
-  if (buzzRemaining > 0) return;
-  if (bpmValid) {
-    if (bpm > BPM_HIGH_ALERT)      { buzzMotor(2, 220); return; }
-    else if (bpm < BPM_LOW_ALERT)  { buzzMotor(1, 180, 400); return; }
-  }
-  if (feverNow()) buzzMotor(3, 220);
-}
-
-
-// =============================================================================
-//  BUTTON + OLED PAGES
+//  DISPLAY STATE, WAKE/SLEEP, TOASTS
 // =============================================================================
 
 enum DisplayPage {
-  PAGE_HEART_RATE = 0,
+  PAGE_FACE = 0,
+  PAGE_HEART_RATE,
   PAGE_TEMPERATURE,
   PAGE_GSR,
   PAGE_ACCEL,
   PAGE_BATTERY,
   PAGE_COUNT
 };
-DisplayPage currentPage = PAGE_HEART_RATE;
+DisplayPage currentPage = PAGE_FACE;
 
-#define DEBOUNCE_MS  50
-bool          lastButtonState  = HIGH;
-bool          buttonState      = HIGH;
-unsigned long lastDebounceTime = 0;
+#define DISPLAY_TIMEOUT_MS  30000UL    // OLED sleeps after this much idle time
+bool          displayAwake    = true;
+unsigned long lastInteraction = 0;
+
+volatile bool wakeRequest = false;     // set from BLE callbacks, handled in loop()
+
+const char *volatile toastText = nullptr;
+unsigned long        toastUntil = 0;
+#define TOAST_MS  1800
+
+void showToast(const char *text) {
+  toastText  = text;
+  toastUntil = millis() + TOAST_MS;
+  wakeRequest = true;
+}
+
+void wakeDisplay() {
+  lastInteraction = millis();
+  if (!displayAwake && oledOk) {
+    display.ssd1306_command(SSD1306_DISPLAYON);
+    displayAwake = true;
+  }
+}
+
+void sleepDisplay() {
+  if (!displayAwake || !oledOk) return;
+  display.clearDisplay();
+  display.display();
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
+  displayAwake = false;
+}
+
+
+// =============================================================================
+//  ALERTS & HAPTICS
+// =============================================================================
+
+#define BPM_HIGH_ALERT   110
+#define BPM_LOW_ALERT     50
+#define TEMP_FEVER_C    37.8
+#define ALERT_CLEAR_CHECKS   3         // condition must be gone this many checks
+#define ALERT_REBUZZ_MS  10000UL       // nag haptic until dismissed
+
+AlertType activeAlert = ALERT_NONE;
+bool      alertDismissed = false;
+int       alertClearCount = 0;
+
+unsigned long lastAlertCheck = 0;
+unsigned long lastAlertBuzz  = 0;
+#define ALERT_CHECK_MS  1000
+
+void publishAlert();                   // BLE section
+
+bool feverNow() { return !isnan(tempC) && tempC > TEMP_FEVER_C && tempC < 45.0; }
+
+AlertType evaluateAlertCondition() {
+  if (feverNow()) return ALERT_FEVER;
+  if (bpmValid && bpm > BPM_HIGH_ALERT) return ALERT_HIGH_HR;
+  if (bpmValid && bpm < BPM_LOW_ALERT) return ALERT_LOW_HR;
+  if (batteryVoltage < 3.4f && batteryVoltage > 2.0f) return ALERT_BATTERY;
+  return ALERT_NONE;
+}
+
+void triggerAlertHaptic(AlertType alert) {
+  lastAlertBuzz = millis();
+  switch (alert) {
+    case ALERT_FEVER:   buzzMotor(3, 220); break;
+    case ALERT_HIGH_HR: buzzMotor(2, 220); break;
+    case ALERT_LOW_HR:  buzzMotor(1, 180, 400); break;
+    case ALERT_BATTERY: buzzMotor(1, 100, 500); break;
+    default: break;
+  }
+}
+
+void stopMotor() {
+  buzzRemaining = 0;
+  ledcWrite(MOTOR_PIN, 0);
+}
+
+void checkAlerts() {
+  AlertType candidate = evaluateAlertCondition();
+
+  if (candidate == activeAlert) {
+    alertClearCount = 0;
+  } else if (candidate == ALERT_NONE && ++alertClearCount < ALERT_CLEAR_CHECKS) {
+    // Condition vanished — wait a few checks so a flickering sensor doesn't
+    // re-arm (and re-buzz) an alert the wearer already dismissed.
+  } else {
+    alertClearCount = 0;
+    activeAlert     = candidate;
+    alertDismissed  = false;
+    publishAlert();
+    if (activeAlert != ALERT_NONE) {
+      wakeDisplay();
+      triggerAlertHaptic(activeAlert);
+    }
+    return;
+  }
+
+  if (activeAlert != ALERT_NONE && !alertDismissed && buzzRemaining <= 0 &&
+      millis() - lastAlertBuzz >= ALERT_REBUZZ_MS) {
+    triggerAlertHaptic(activeAlert);
+  }
+}
+
+bool alertVisible() { return activeAlert != ALERT_NONE && !alertDismissed; }
+
+
+// =============================================================================
+//  PUSH BUTTON  (D3 -> GND, INPUT_PULLUP, active-low)
+//    short press : dismiss active alert, otherwise next screen
+//    long press  : back to the watch face
+//    any press   : wakes a sleeping display (first press only wakes)
+// =============================================================================
+
+#define DEBOUNCE_MS     30
+#define LONG_PRESS_MS  700
+
+bool          btnRawLast    = HIGH;
+bool          btnStable     = HIGH;
+unsigned long btnRawChanged = 0;
+unsigned long btnDownAt     = 0;
+bool          btnLongDone   = false;
+
+void updateDisplay();
+
+void onShortPress() {
+  if (!displayAwake) { wakeDisplay(); return; }
+  wakeDisplay();
+  if (alertVisible()) {
+    alertDismissed = true;
+    stopMotor();
+    publishAlert();
+    showToast("Alert dismissed");
+    Serial.println(F("[Button] short: dismiss alert"));
+  } else {
+    currentPage = (DisplayPage)((currentPage + 1) % PAGE_COUNT);
+    Serial.print(F("[Button] short: screen "));
+    Serial.println((int)currentPage + 1);
+  }
+  updateDisplay();
+}
+
+void onLongPress() {
+  bool wasAsleep = !displayAwake;
+  wakeDisplay();
+  currentPage = PAGE_FACE;
+  if (!wasAsleep) buzzMotor(1, 120, 40);
+  Serial.println(F("[Button] long: home"));
+  updateDisplay();
+}
 
 void handleButton() {
-  bool reading = digitalRead(SWITCH_PIN);
-  if (reading != lastButtonState) lastDebounceTime = millis();
-
-  if ((millis() - lastDebounceTime) > DEBOUNCE_MS && reading != buttonState) {
-    buttonState = reading;
-    if (buttonState == LOW) currentPage = (DisplayPage)((currentPage + 1) % PAGE_COUNT);
+  unsigned long now = millis();
+  bool raw = digitalRead(BUTTON_PIN);
+  if (raw != btnRawLast) {
+    btnRawLast    = raw;
+    btnRawChanged = now;
   }
-  lastButtonState = reading;
+  if (now - btnRawChanged >= DEBOUNCE_MS && raw != btnStable) {
+    btnStable = raw;
+    if (btnStable == LOW) {
+      btnDownAt   = now;
+      btnLongDone = false;
+    } else if (!btnLongDone) {
+      onShortPress();
+    }
+  }
+  if (btnStable == LOW && !btnLongDone && now - btnDownAt >= LONG_PRESS_MS) {
+    btnLongDone = true;
+    onLongPress();
+  }
+}
+
+
+// =============================================================================
+//  DRAWING HELPERS
+// =============================================================================
+
+void textAt(int x, int y, int size, const char *s) {
+  display.setTextSize(size);
+  display.setCursor(x, y);
+  display.print(s);
+}
+
+void textCentered(int cx, int y, int size, const char *s) {
+  int w = (int)strlen(s) * 6 * size;
+  textAt(cx - w / 2, y, size, s);
+}
+
+// Solid heart centred on (cx, cy); r = lobe radius.
+void drawHeart(int cx, int cy, int r) {
+  display.fillCircle(cx - r, cy, r, SSD1306_WHITE);
+  display.fillCircle(cx + r, cy, r, SSD1306_WHITE);
+  display.fillTriangle(cx - 2 * r, cy + 1, cx + 2 * r, cy + 1, cx, cy + 3 * r, SSD1306_WHITE);
+}
+
+// Water drop; (cx, cy) is the bulb centre, r the bulb radius.
+void drawDrop(int cx, int cy, int r) {
+  display.fillCircle(cx, cy, r, SSD1306_WHITE);
+  display.fillTriangle(cx, cy - 2 * r, cx - (r * 7) / 8, cy - r / 2, cx + (r * 7) / 8, cy - r / 2,
+                       SSD1306_WHITE);
+}
+
+// Tiny thermometer, 5 px wide.
+void drawMiniThermo(int x, int y) {
+  display.drawRect(x + 1, y, 3, 6, SSD1306_WHITE);
+  display.fillCircle(x + 2, y + 6, 2, SSD1306_WHITE);
+}
+
+void drawBleGlyph(int x, int y, bool connected) {
+  if (!connected) {
+    display.drawPixel(x + 2, y + 4, SSD1306_WHITE);   // idle: just a dot
+    return;
+  }
+  display.drawFastVLine(x + 2, y, 9, SSD1306_WHITE);
+  display.drawLine(x + 2, y, x + 4, y + 2, SSD1306_WHITE);
+  display.drawLine(x + 4, y + 2, x, y + 6, SSD1306_WHITE);
+  display.drawLine(x + 2, y + 8, x + 4, y + 6, SSD1306_WHITE);
+  display.drawLine(x + 4, y + 6, x, y + 2, SSD1306_WHITE);
+}
+
+void drawBatteryIcon(int x, int y, int pct) {
+  display.drawRect(x, y, 16, 8, SSD1306_WHITE);
+  display.fillRect(x + 16, y + 2, 2, 4, SSD1306_WHITE);
+  int w = (pct * 12) / 100;
+  if (w > 0) display.fillRect(x + 2, y + 2, w, 4, SSD1306_WHITE);
+}
+
+// Top strip shared by every page: title, page dots, link state, battery.
+void drawStatusBar(const char *title, int page) {
+  display.setTextColor(SSD1306_WHITE);
+  textAt(0, 0, 1, title);
+
+  for (int i = 0; i < PAGE_COUNT; i++) {
+    int x = 48 + i * 7;
+    if (i == page) display.fillCircle(x + 1, 4, 2, SSD1306_WHITE);
+    else           display.fillRect(x, 3, 2, 2, SSD1306_WHITE);
+  }
+
+  drawBleGlyph(92, 0, bleServer && bleServer->getConnectedCount() > 0);
+  drawBatteryIcon(104, 0, batteryPct);
+}
+
+
+// =============================================================================
+//  WATCH FACE & PAGES
+// =============================================================================
+
+const char *const WEEKDAYS[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+const char *const MONTHS[]   = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+
+// Howard Hinnant's civil-from-days; days = days since 1970-01-01.
+void civilFromDays(int32_t z, int &y, int &m, int &d) {
+  z += 719468;
+  int32_t  era = (z >= 0 ? z : z - 146096) / 146097;
+  uint32_t doe = (uint32_t)(z - era * 146097);
+  uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  y            = (int)yoe + era * 400;
+  uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  uint32_t mp  = (5 * doy + 2) / 153;
+  d            = (int)(doy - (153 * mp + 2) / 5 + 1);
+  m            = (int)(mp < 10 ? mp + 3 : mp - 9);
+  if (m <= 2) y++;
+}
+
+void drawFace() {
+  drawStatusBar("", PAGE_FACE);
+
+  uint32_t t   = localEpoch();
+  uint32_t sod = t % 86400UL;
+  int hh = sod / 3600, mm = (sod / 60) % 60, ss = sod % 60;
+  char buf[16];
+
+  // HH:MM in 18x24 digits, colon blinks, seconds tucked at the right.
+  snprintf(buf, sizeof(buf), "%02d", hh);
+  textAt(6, 12, 3, buf);
+  if (ss % 2 == 0) textAt(42, 12, 3, ":");
+  snprintf(buf, sizeof(buf), "%02d", mm);
+  textAt(60, 12, 3, buf);
+  snprintf(buf, sizeof(buf), "%02d", ss);
+  textAt(104, 28, 1, buf);
+
+  if (timeSynced) {
+    int y, m, d;
+    int32_t days = (int32_t)(t / 86400UL);
+    civilFromDays(days, y, m, d);
+    snprintf(buf, sizeof(buf), "%s %d %s", WEEKDAYS[(days + 4) % 7], d, MONTHS[m - 1]);
+    textCentered(64, 41, 1, buf);
+  } else {
+    textCentered(64, 41, 1, "open app to sync");
+  }
+
+  // Glance row: heart rate, temperature, sweat.
+  drawHeart(7, 53, 2);
+  if (bpmValid) snprintf(buf, sizeof(buf), "%d", bpm);
+  else          snprintf(buf, sizeof(buf), "--");
+  textAt(16, 52, 1, buf);
+
+  drawMiniThermo(49, 51);
+  if (tempOk && !isnan(tempC)) snprintf(buf, sizeof(buf), "%.1f", tempC);
+  else                         snprintf(buf, sizeof(buf), "--");
+  textAt(58, 52, 1, buf);
+
+  drawDrop(95, 56, 3);
+  snprintf(buf, sizeof(buf), "%.1f", gsrMicrosiemens);
+  textAt(102, 52, 1, buf);
 }
 
 void drawPage_HeartRate() {
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(F("  == HEART RATE =="));
-  display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
-  display.setCursor(0, 14);
-  display.print(F("Signal: "));
-  display.println(pulseRaw);
-  display.setCursor(0, 28);
-  display.print(F("BPM: "));
-  if (bpmValid) {
-    display.setTextSize(2);
-    display.println(bpm);
-  } else {
-    display.setTextSize(1);
-    display.println(F("Measuring..."));
+  drawStatusBar("HEART", PAGE_HEART_RATE);
+  char buf[16];
+
+  if (bpmValid) snprintf(buf, sizeof(buf), "%d", bpm);
+  else          snprintf(buf, sizeof(buf), "--");
+  textAt(4, 13, 3, buf);
+  textAt(4, 38, 1, bpmValid ? "BPM" : "place finger");
+
+  // Heart swells for ~150 ms after each detected beat.
+  bool beat = lastBeatTime != 0 && millis() - lastBeatTime < 150;
+  drawHeart(108, 22, beat ? 7 : 5);
+
+  // Rolling pulse waveform, auto-scaled to its own min/max.
+  uint8_t lo = 255, hi = 0;
+  for (int i = 0; i < WAVE_LEN; i++) {
+    if (waveBuf[i] < lo) lo = waveBuf[i];
+    if (waveBuf[i] > hi) hi = waveBuf[i];
+  }
+  int range = hi - lo;
+  if (range < 6) range = 6;
+  int prevY = -1;
+  for (int x = 0; x < WAVE_LEN; x++) {
+    uint8_t v = waveBuf[(waveIdx + x) % WAVE_LEN];
+    int y = 62 - ((v - lo) * 16) / range;
+    if (prevY >= 0) display.drawLine(x - 1, prevY, x, y, SSD1306_WHITE);
+    prevY = y;
   }
 }
 
 void drawPage_Temperature() {
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(F(" == TEMPERATURE =="));
-  display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
+  drawStatusBar("TEMP", PAGE_TEMPERATURE);
+  char buf[16];
+
   if (!tempOk || isnan(tempC)) {
-    display.setCursor(0, 20);
-    display.println(tempOk ? F("Waiting...") : F("TMP117 not found"));
+    textCentered(64, 28, 1, tempOk ? "reading..." : "TMP117 not found");
     return;
   }
-  display.setCursor(0, 16);
-  display.setTextSize(2);
-  display.print(tempC, 1);
-  display.setTextSize(1);
-  display.println(F(" C"));
-  display.setCursor(0, 40);
-  display.print(tempF, 1);
-  display.println(F(" F"));
-  if (feverNow()) {
-    display.setCursor(0, 54);
-    display.print(F("*** FEVER ALERT ***"));
+
+  snprintf(buf, sizeof(buf), "%.1f", tempC);
+  textAt(4, 13, 3, buf);
+  textAt(78, 13, 2, "C");
+
+  snprintf(buf, sizeof(buf), "%.1f F", tempF);
+  textAt(4, 40, 1, buf);
+
+  bool fever = feverNow();
+  if (fever) {
+    display.fillRect(4, 52, 66, 10, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    textAt(8, 53, 1, "FEVER WARN");
+    display.setTextColor(SSD1306_WHITE);
+  } else {
+    textAt(4, 53, 1, "NORMAL");
   }
+
+  // Thermometer gauge, 30..42 C.
+  int level = (int)(((constrain(tempC, 30.0f, 42.0f) - 30.0f) / 12.0f) * 34.0f);
+  display.drawRoundRect(104, 12, 8, 40, 3, SSD1306_WHITE);
+  display.fillCircle(108, 55, 6, SSD1306_WHITE);
+  display.fillRect(106, 50 - level, 4, level + 2, SSD1306_WHITE);
 }
 
 void drawPage_GSR() {
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(F("  == GSR SENSOR =="));
-  display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
-  display.setCursor(0, 16);
-  display.print(F("Raw ADC : "));
-  display.println(gsrRaw);
-  display.setCursor(0, 28);
-  display.print(F("Voltage : "));
-  display.print(gsrVoltage, 3);
-  display.println(F(" V"));
-  display.setCursor(0, 40);
-  display.print(F("Cond    : "));
-  display.print(gsrMicrosiemens, 2);
-  display.println(F(" uS"));
+  drawStatusBar("SWEAT", PAGE_GSR);
+  char buf[16];
+
+  snprintf(buf, sizeof(buf), "%.1f", gsrMicrosiemens);
+  textAt(4, 13, 3, buf);
+  textAt(4, 38, 1, "uS conductance");
+  drawDrop(112, 26, 8);
+
+  // 16-segment level bar, full scale 20 uS.
+  int segs = (int)((constrain(gsrMicrosiemens, 0.0f, 20.0f) / 20.0f) * 16.0f + 0.5f);
+  for (int i = 0; i < 16; i++) {
+    int x = 4 + i * 7;
+    if (i < segs) display.fillRect(x, 49, 5, 6, SSD1306_WHITE);
+    else          display.drawRect(x, 49, 5, 6, SSD1306_WHITE);
+  }
+  const char *label = gsrMicrosiemens > 15.0f ? "HEAVY SWEAT"
+                    : gsrMicrosiemens > 5.0f  ? "MODERATE"
+                                              : "RESTING";
+  textAt(4, 57, 1, label);
 }
 
 void drawPage_Accel() {
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(F("  == MPU-6050 =="));
-  display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
+  drawStatusBar("MOTION", PAGE_ACCEL);
+  char buf[16];
+
   if (!mpuOk) {
-    display.setCursor(0, 20);
-    display.println(F("MPU-6050 not found"));
+    textCentered(64, 28, 1, "MPU-6050 not found");
     return;
   }
-  display.setCursor(0, 14);
-  display.print(F("Ax:")); display.print(ax);
-  display.print(F(" Ay:")); display.print(ay);
-  display.setCursor(0, 26);
-  display.print(F("Az:")); display.println(az);
-  display.setCursor(0, 40);
-  display.print(F("Gx:")); display.print(gx);
-  display.print(F(" Gy:")); display.print(gy);
-  display.setCursor(0, 52);
-  display.print(F("Gz:")); display.println(gz);
+
+  snprintf(buf, sizeof(buf), "%.2f", isnan(accelG) ? 0.0f : accelG);
+  textAt(4, 13, 3, buf);
+  textAt(62, 30, 1, "g");
+
+  const char *label = activityEma < 0.06f ? "STILL" : activityEma < 0.25f ? "LIGHT" : "ACTIVE";
+  textAt(80, 15, 1, "ACTIVITY");
+  textAt(80, 26, 1, label);
+
+  // Rolling |a|-1g history.
+  int prevY = -1;
+  for (int x = 0; x < ACC_LEN; x++) {
+    float v = accBuf[(accIdx + x) % ACC_LEN];
+    int px  = x * 2;
+    int y   = 62 - (int)(constrain(v, 0.0f, 1.0f) * 18.0f);
+    if (prevY >= 0) display.drawLine(px - 2, prevY, px, y, SSD1306_WHITE);
+    prevY = y;
+  }
+  display.drawFastHLine(0, 62, SCREEN_WIDTH, SSD1306_WHITE);
 }
 
 void drawPage_Battery() {
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println(F("   == BATTERY =="));
-  display.drawFastHLine(0, 10, SCREEN_WIDTH, SSD1306_WHITE);
-  display.setCursor(0, 18);
-  display.setTextSize(2);
-  display.print(batteryVoltage, 2);
-  display.setTextSize(1);
-  display.print(F(" V  "));
-  display.print(batteryPct);
-  display.println(F("%"));
-  display.setCursor(0, 44);
-  display.print(F("Status: "));
-  if      (batteryVoltage >= 4.0) display.println(F("Full"));
-  else if (batteryVoltage >= 3.6) display.println(F("Good"));
-  else if (batteryVoltage >= 3.3) display.println(F("Low"));
-  else                            display.println(F("Critical!"));
+  drawStatusBar("BATTERY", PAGE_BATTERY);
+  char buf[16];
+
+  // Big cell with the percentage inverted over the fill.
+  display.drawRoundRect(4, 14, 78, 34, 4, SSD1306_WHITE);
+  display.fillRect(82, 25, 4, 12, SSD1306_WHITE);
+  int w = (batteryPct * 70) / 100;
+  if (w > 0) display.fillRect(8, 18, w, 26, SSD1306_WHITE);
+  snprintf(buf, sizeof(buf), "%d%%", batteryPct);
+  display.setTextColor(SSD1306_INVERSE);
+  textCentered(43, 24, 2, buf);
+  display.setTextColor(SSD1306_WHITE);
+
+  snprintf(buf, sizeof(buf), "%.2fV", batteryVoltage);
+  textAt(92, 18, 1, buf);
+  const char *state = batteryVoltage >= 4.0f ? "FULL"
+                    : batteryVoltage >= 3.6f ? "GOOD"
+                    : batteryVoltage >= 3.4f ? "LOW"
+                                             : "CRIT";
+  textAt(92, 30, 1, state);
+
+  textAt(4, 54, 1, "low-battery alert <3.4V");
+}
+
+
+// =============================================================================
+//  ALERT OVERLAY & TOAST
+// =============================================================================
+
+void drawAlertOverlay() {
+  const char *title = "";
+  const char *unit  = "";
+  char value[12]    = {0};
+
+  switch (activeAlert) {
+    case ALERT_FEVER:
+      title = "FEVER";
+      unit  = "deg C - high temp";
+      snprintf(value, sizeof(value), "%.1f", tempC);
+      break;
+    case ALERT_HIGH_HR:
+      title = "HIGH HEART RATE";
+      unit  = "bpm - too fast";
+      snprintf(value, sizeof(value), "%d", bpm);
+      break;
+    case ALERT_LOW_HR:
+      title = "LOW HEART RATE";
+      unit  = "bpm - too slow";
+      snprintf(value, sizeof(value), "%d", bpm);
+      break;
+    case ALERT_BATTERY:
+      title = "LOW BATTERY";
+      unit  = "charge soon";
+      snprintf(value, sizeof(value), "%d%%", batteryPct);
+      break;
+    default:
+      return;
+  }
+
+  display.clearDisplay();
+
+  // Flashing banner.
+  bool flash = (millis() / 450) % 2;
+  if (flash) {
+    display.fillRect(0, 0, SCREEN_WIDTH, 13, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.drawRect(0, 0, SCREEN_WIDTH, 13, SSD1306_WHITE);
+    display.setTextColor(SSD1306_WHITE);
+  }
+  textCentered(64, 3, 1, title);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Warning triangle.
+  display.drawTriangle(24, 18, 5, 51, 43, 51, SSD1306_WHITE);
+  display.drawTriangle(24, 22, 9, 49, 39, 49, SSD1306_WHITE);
+  textAt(18, 30, 2, "!");
+
+  textAt(52, 20, 2, value);
+  textAt(52, 40, 1, unit);
+
+  display.drawFastHLine(0, 54, SCREEN_WIDTH, SSD1306_WHITE);
+  textCentered(64, 56, 1, "press to dismiss");
+}
+
+void drawToast() {
+  const char *text = toastText;
+  if (!text || (long)(toastUntil - millis()) <= 0) return;
+  int w = (int)strlen(text) * 6 + 12;
+  int x = (SCREEN_WIDTH - w) / 2;
+  display.fillRoundRect(x, 50, w, 13, 4, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  textAt(x + 6, 53, 1, text);
+  display.setTextColor(SSD1306_WHITE);
 }
 
 void updateDisplay() {
   if (!oledOk) return;
+
+  if (wakeRequest) { wakeRequest = false; wakeDisplay(); }
+  if (alertVisible()) wakeDisplay();
+
+  if (displayAwake && millis() - lastInteraction > DISPLAY_TIMEOUT_MS) {
+    sleepDisplay();
+  }
+  if (!displayAwake) return;
+
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  switch (currentPage) {
-    case PAGE_HEART_RATE:  drawPage_HeartRate();   break;
-    case PAGE_TEMPERATURE: drawPage_Temperature(); break;
-    case PAGE_GSR:         drawPage_GSR();         break;
-    case PAGE_ACCEL:       drawPage_Accel();       break;
-    case PAGE_BATTERY:     drawPage_Battery();     break;
-    default:               break;
+
+  if (alertVisible()) {
+    drawAlertOverlay();
+  } else {
+    switch (currentPage) {
+      case PAGE_FACE:        drawFace();             break;
+      case PAGE_HEART_RATE:  drawPage_HeartRate();   break;
+      case PAGE_TEMPERATURE: drawPage_Temperature(); break;
+      case PAGE_GSR:         drawPage_GSR();         break;
+      case PAGE_ACCEL:       drawPage_Accel();       break;
+      case PAGE_BATTERY:     drawPage_Battery();     break;
+      default:               drawFace();             break;
+    }
   }
-  // BLE link indicator, top-right corner: filled = connected, ring = advertising
-  if (bleServer && bleServer->getConnectedCount() > 0) display.fillCircle(123, 4, 3, SSD1306_WHITE);
-  else display.drawCircle(123, 4, 3, SSD1306_WHITE);
+
+  drawToast();
   display.display();
 }
 
@@ -530,11 +955,13 @@ void updateDisplay() {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override {
     Serial.println(F("BLE connected"));
+    showToast("App connected");
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
     Serial.println(F("BLE disconnected — advertising again"));
-    buzzRemaining = 0;                         // don't leave a BLE-held motor running
+    buzzRemaining = 0;
     ledcWrite(MOTOR_PIN, 0);
+    showToast("App disconnected");
     NimBLEDevice::startAdvertising();
   }
 };
@@ -543,14 +970,37 @@ class VibrationCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     NimBLEAttValue v = c->getValue();
     if (v.size() < 1) return;
-    buzzRemaining = 0;                         // manual control cancels any pattern
+    buzzRemaining = 0;
     ledcWrite(MOTOR_PIN, v.data()[0]);
+  }
+};
+
+class TimeCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+    NimBLEAttValue v = c->getValue();
+    if (v.size() < 4) return;
+    const uint8_t *p = v.data();
+    uint32_t epoch = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+                     ((uint32_t)p[3] << 24);
+    timeBaseMs  = millis();
+    timeBaseSec = epoch;
+    timeSynced  = true;
+    Serial.print(F("Clock synced: "));
+    Serial.println(epoch);
   }
 };
 
 void notifyFloat(NimBLECharacteristic *c, float value) {
   c->setValue((const uint8_t *)&value, sizeof(value));
   c->notify();
+}
+
+// Push the alert the wearer currently sees (0 once dismissed or cleared).
+void publishAlert() {
+  if (!alertChar) return;
+  uint8_t code = alertVisible() ? (uint8_t)activeAlert : (uint8_t)ALERT_NONE;
+  alertChar->setValue(&code, 1);
+  if (bleServer && bleServer->getConnectedCount() > 0) alertChar->notify();
 }
 
 void setupBle() {
@@ -567,8 +1017,13 @@ void setupBle() {
   NimBLECharacteristic *vib = svc->createCharacteristic(
       CHAR_VIBRATION_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   vib->setCallbacks(new VibrationCallbacks());
+  NimBLECharacteristic *clk = svc->createCharacteristic(
+      CHAR_TIME_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  clk->setCallbacks(new TimeCallbacks());
+  alertChar = svc->createCharacteristic(CHAR_ALERT_UUID, RN);
+  uint8_t none = ALERT_NONE;
+  alertChar->setValue(&none, 1);
 
-  // Device Information: serial derived from the chip MAC (unique per unit).
   uint64_t mac = ESP.getEfuseMac();
   char serial[16];
   snprintf(serial, sizeof(serial), "SWST-%02X%02X%02X",
@@ -577,12 +1032,11 @@ void setupBle() {
   info->createCharacteristic(NimBLEUUID((uint16_t)0x2A29), NIMBLE_PROPERTY::READ)->setValue(BLE_MANUFACTURER);
   info->createCharacteristic(NimBLEUUID((uint16_t)0x2A24), NIMBLE_PROPERTY::READ)->setValue(BLE_MODEL_NUMBER);
   info->createCharacteristic(NimBLEUUID((uint16_t)0x2A25), NIMBLE_PROPERTY::READ)->setValue(serial);
-  Serial.print(F("Serial: ")); Serial.println(serial);
 
   NimBLEService *batt = bleServer->createService(NimBLEUUID((uint16_t)0x180F));
   batteryChar = batt->createCharacteristic(NimBLEUUID((uint16_t)0x2A19), RN);
 
-  bleServer->start();                          // starts all services above
+  bleServer->start();
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->setName(BLE_DEVICE_NAME);
@@ -591,8 +1045,6 @@ void setupBle() {
   adv->start();
 }
 
-// Push the latest readings to the app. Only valid values are sent — a sensor
-// that is missing or has no signal (no pulse, no TMP117) simply sends nothing.
 unsigned long lastNotify = 0;
 #define NOTIFY_MS  1000
 
@@ -608,61 +1060,115 @@ void notifyReadings() {
 
 
 // =============================================================================
+//  BOOT SEQUENCE & SPLASH
+// =============================================================================
+
+void showBootSplash(const char *subtext, int progressPct) {
+  if (!oledOk) return;
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  drawDrop(64, 17, 7);                                     // sweat drop mark
+  textCentered(64, 30, 1, "SWEATSALT");
+  textCentered(64, 40, 1, subtext);
+
+  display.drawRoundRect(14, 53, 100, 7, 3, SSD1306_WHITE);
+  int fillWidth = (progressPct * 96) / 100;
+  if (fillWidth > 0) display.fillRoundRect(16, 55, fillWidth, 3, 1, SSD1306_WHITE);
+  display.display();
+}
+
+void bootRow(int y, const char *name, bool ok) {
+  textAt(6, y, 1, name);
+  textAt(84, y, 1, ok ? "OK" : "FAIL");
+  if (ok) {                                                // tick mark
+    display.drawLine(108, y + 4, 110, y + 6, SSD1306_WHITE);
+    display.drawLine(110, y + 6, 114, y + 1, SSD1306_WHITE);
+  }
+}
+
+void showBootDiagnostics() {
+  if (!oledOk) return;
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  textCentered(64, 1, 1, "SS-MVP-1 SELF TEST");
+  display.drawFastHLine(0, 11, SCREEN_WIDTH, SSD1306_WHITE);
+
+  bootRow(15, "IMU",  mpuOk);
+  bootRow(25, "TEMP", tempOk);
+  bootRow(35, "BLE",  true);
+
+  char buf[24];
+  snprintf(buf, sizeof(buf), "BATT %d%% %.2fV", batteryPct, batteryVoltage);
+  textAt(6, 45, 1, buf);
+
+  display.fillRect(0, 55, SCREEN_WIDTH, 9, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  textCentered(64, 56, 1, "READY");
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
+}
+
+
+// =============================================================================
 //  SETUP
 // =============================================================================
 
 void setup() {
   Serial.begin(115200);
-  // Wait for a USB serial monitor, but not forever: the device has to boot
-  // normally on battery with no computer attached.
   unsigned long t0 = millis();
   while (!Serial && millis() - t0 < 2000) delay(10);
   Serial.println(F("\n=== SweatSalt firmware — boot ==="));
 
   pinMode(USER_LED, OUTPUT);
-  digitalWrite(USER_LED, LOW);                 // ON during boot
+  digitalWrite(USER_LED, LED_OFF);
 
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   analogReadResolution(12);
 
-  Wire.begin();                                // D4 = SDA, D5 = SCL
-  Wire.setClock(400000);                       // faster OLED refresh
+  Wire.begin();
+  Wire.setClock(400000);
 
   ledcAttach(MOTOR_PIN, PWM_FREQ, PWM_RESOLUTION);
   ledcWrite(MOTOR_PIN, 0);
 
   oledOk = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
   if (oledOk) {
-    display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(20, 24);
-    display.println(F("Initialising..."));
-    display.display();
+    showBootSplash("Starting...", 15);
   }
-  Serial.println(oledOk ? F("OLED        OK") : F("WARNING: OLED not found at 0x3D — continuing without display"));
 
   Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B);                            // PWR_MGMT_1: clear SLEEP
+  Wire.write(0x6B);
   Wire.write(0x00);
   mpuOk = (Wire.endTransmission(true) == 0);
-  Serial.println(mpuOk ? F("MPU-6050    OK") : F("WARNING: MPU-6050 not responding"));
+  showBootSplash("Sensors...", 40);
 
   tempOk = tempSensor.begin();
-  Serial.println(tempOk ? F("TMP117      OK") : F("WARNING: TMP117 not found at 0x48 — continuing without temp"));
+  showBootSplash("Temperature...", 65);
 
   setupBle();
-  Serial.println(F("BLE         advertising"));
+  showBootSplash("Bluetooth...", 85);
 
   readBatteryBlocking();                       // so the first notify has a value
-  buzzMotor(1, 150, 200);                      // boot buzz
-  digitalWrite(USER_LED, HIGH);                // OFF: boot complete
+  showBootSplash("Ready!", 100);
+  delay(300);
+
+  showBootDiagnostics();
+
+  buzzMotor(1, 180, 150);
+  flashLed(120);
+
+  delay(1200);
+  lastInteraction   = millis();
+  lastDisplayUpdate = millis();
+
   Serial.println(F("=== Boot complete ===\n"));
 }
 
 
 // =============================================================================
-//  MAIN LOOP  (non-blocking — all timing via millis())
+//  MAIN LOOP
 // =============================================================================
 
 void loop() {
@@ -670,14 +1176,15 @@ void loop() {
 
   handleButton();
   updateBuzz();
+  updateLed();
 
   if (now - lastPulseSample >= PULSE_SAMPLE_MS) { lastPulseSample = now; updatePulse(); }
   if (now - lastGsrSample   >= GSR_SAMPLE_MS)   { lastGsrSample   = now; readGSR(); }
   updateBattery(now);
   if (now - lastTempSample  >= TEMP_SAMPLE_MS)  { lastTempSample  = now; readTemperature(); }
   if (mpuOk && now - lastAccelSample >= ACCEL_SAMPLE_MS) { lastAccelSample = now; readMPU6050(); }
-  if (now - lastDisplayUpdate >= DISPLAY_MS)    { lastDisplayUpdate = now; updateDisplay(); }
   if (now - lastAlertCheck  >= ALERT_CHECK_MS)  { lastAlertCheck  = now; checkAlerts(); }
+  if (now - lastDisplayUpdate >= DISPLAY_MS)    { lastDisplayUpdate = now; updateDisplay(); }
   if (now - lastNotify      >= NOTIFY_MS)       { lastNotify      = now; notifyReadings(); }
 
   static unsigned long lastSerial = 0;
