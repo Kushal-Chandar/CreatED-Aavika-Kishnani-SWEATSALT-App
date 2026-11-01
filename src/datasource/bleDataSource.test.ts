@@ -6,6 +6,9 @@ import {
   CHAR_HR_UUID,
   CHAR_TEMP_UUID,
   CHAR_IMU_UUID,
+  CHAR_VIBRATION_UUID,
+  CHAR_TIME_UUID,
+  CHAR_ALERT_UUID,
   DEVICE_INFO_SERVICE_UUID,
   MODEL_NUMBER_UUID,
   SERIAL_NUMBER_UUID,
@@ -331,6 +334,88 @@ describe("BleDataSource", () => {
 
       expect(() => source.stop()).not.toThrow();
       await Promise.resolve();
+    });
+
+    it("discovers vibration characteristic and writes PWM byte to it", async () => {
+      const vibChar = Object.assign(fakeCharacteristic(), {
+        writeValueWithoutResponse: vi.fn().mockResolvedValue(undefined),
+      });
+      const sweatSaltService = fakeService({
+        [CHAR_GSR_UUID]: fakeCharacteristic(),
+        [CHAR_HR_UUID]: fakeCharacteristic(),
+        [CHAR_TEMP_UUID]: fakeCharacteristic(),
+        [CHAR_IMU_UUID]: fakeCharacteristic(),
+        [CHAR_VIBRATION_UUID]: vibChar,
+      });
+      const device = fakeDevice({ [SWEATSALT_SERVICE_UUID]: sweatSaltService });
+      vi.stubGlobal("navigator", {
+        bluetooth: { requestDevice: vi.fn().mockResolvedValue(device) },
+      });
+
+      const source = new BleDataSource();
+      await source.start();
+      await source.setVibration(200);
+
+      expect(vibChar.writeValueWithoutResponse).toHaveBeenCalledWith(new Uint8Array([200]));
+    });
+
+    it("writes local epoch seconds to the time characteristic on connect", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+      const timeChar = Object.assign(fakeCharacteristic(), {
+        writeValue: vi.fn().mockResolvedValue(undefined),
+      });
+      const service = fakeService({
+        [CHAR_GSR_UUID]: fakeCharacteristic(),
+        [CHAR_HR_UUID]: fakeCharacteristic(),
+        [CHAR_TEMP_UUID]: fakeCharacteristic(),
+        [CHAR_IMU_UUID]: fakeCharacteristic(),
+        [CHAR_VIBRATION_UUID]: fakeCharacteristic(),
+        [CHAR_TIME_UUID]: timeChar,
+        [CHAR_ALERT_UUID]: fakeCharacteristic(),
+      });
+      const device = fakeDevice({ [SWEATSALT_SERVICE_UUID]: service });
+      vi.stubGlobal("navigator", {
+        bluetooth: { requestDevice: vi.fn().mockResolvedValue(device) },
+      });
+
+      const source = new BleDataSource();
+      await source.start();
+      vi.useRealTimers();
+
+      const written = timeChar.writeValue.mock.calls[0][0] as Uint8Array;
+      const seconds = new DataView(written.buffer).getUint32(0, true);
+      const expected = Math.floor(Date.parse("2026-11-01T12:00:00Z") / 1000) - new Date("2026-11-01T12:00:00Z").getTimezoneOffset() * 60;
+      expect(seconds).toBe(expected);
+    });
+
+    it("maps alert notifications to DeviceAlert and clears on disconnect", async () => {
+      const alertChar = fakeCharacteristic();
+      const service = fakeService({
+        [CHAR_GSR_UUID]: fakeCharacteristic(),
+        [CHAR_HR_UUID]: fakeCharacteristic(),
+        [CHAR_TEMP_UUID]: fakeCharacteristic(),
+        [CHAR_IMU_UUID]: fakeCharacteristic(),
+        [CHAR_VIBRATION_UUID]: fakeCharacteristic(),
+        [CHAR_TIME_UUID]: Object.assign(fakeCharacteristic(), { writeValue: vi.fn().mockResolvedValue(undefined) }),
+        [CHAR_ALERT_UUID]: alertChar,
+      });
+      const device = fakeDevice({ [SWEATSALT_SERVICE_UUID]: service });
+      vi.stubGlobal("navigator", {
+        bluetooth: { requestDevice: vi.fn().mockResolvedValue(device) },
+      });
+
+      const source = new BleDataSource();
+      const alerts: Array<string | null> = [];
+      source.onAlert((a) => alerts.push(a));
+      await source.start();
+
+      alertChar.fireValueChanged(new DataView(new Uint8Array([1]).buffer));
+      alertChar.fireValueChanged(new DataView(new Uint8Array([0]).buffer));
+      alertChar.fireValueChanged(new DataView(new Uint8Array([2]).buffer));
+      device.fireDisconnect();
+
+      expect(alerts).toEqual(["fever", null, "highHr", null]);
     });
   });
 });

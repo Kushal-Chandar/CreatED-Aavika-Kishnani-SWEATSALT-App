@@ -28,6 +28,7 @@ export function App() {
       <Dashboard
         dataSource={dataSource}
         onConnectDevice={!useBle && isWebBluetoothSupported() ? () => setUseBle(true) : undefined}
+        onDisconnectDevice={useBle ? () => setUseBle(false) : undefined}
       />
       <InstallPrompt />
       {ThemeEditorPanel && (

@@ -1,4 +1,4 @@
-import type { DataSource, Reading, ConnectionStatus, DeviceInfo, Unsubscribe } from "./types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo, DeviceAlert, Unsubscribe } from "./types";
 import { addListener } from "./listeners";
 
 // Must stay byte-for-byte identical to the UUID defines at the top of firmware/firmware.ino.
@@ -7,6 +7,9 @@ export const CHAR_GSR_UUID = "5a7b0000-0001-4a6e-9c1a-000000000001";
 export const CHAR_HR_UUID = "5a7b0000-0001-4a6e-9c1a-000000000002";
 export const CHAR_TEMP_UUID = "5a7b0000-0001-4a6e-9c1a-000000000003";
 export const CHAR_IMU_UUID = "5a7b0000-0001-4a6e-9c1a-000000000004";
+export const CHAR_VIBRATION_UUID = "5a7b0000-0001-4a6e-9c1a-000000000005";
+export const CHAR_TIME_UUID = "5a7b0000-0001-4a6e-9c1a-000000000006";
+export const CHAR_ALERT_UUID = "5a7b0000-0001-4a6e-9c1a-000000000007";
 export const DEVICE_INFO_SERVICE_UUID = 0x180a;
 export const MODEL_NUMBER_UUID = 0x2a24;
 export const SERIAL_NUMBER_UUID = 0x2a25;
@@ -20,12 +23,17 @@ const SENSOR_CHARACTERISTICS: Array<[BluetoothCharacteristicUUID, Reading["sourc
   [CHAR_IMU_UUID, "imu"],
 ];
 
+// Firmware AlertType enum order (0 = none).
+const ALERT_BY_CODE: Array<DeviceAlert | null> = [null, "fever", "highHr", "lowHr", "battery"];
+
 export class BleDataSource implements DataSource {
   private device: BluetoothDevice | null = null;
   private readingListeners: Array<(r: Reading) => void> = [];
   private statusListeners: Array<(s: ConnectionStatus) => void> = [];
   private deviceInfoListeners: Array<(d: DeviceInfo) => void> = [];
   private batteryListeners: Array<(percent: number) => void> = [];
+  private alertListeners: Array<(a: DeviceAlert | null) => void> = [];
+  private vibrationCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
   // Notification handlers attached for the current connection. Tracked so a
   // retry or stop() can detach them instead of leaving them on the old
   // characteristic objects (which would stack duplicates up).
@@ -40,6 +48,8 @@ export class BleDataSource implements DataSource {
     // The link is gone, so the characteristics are dead too — drop their
     // handlers (no stopNotifications: there's nothing to talk to).
     this.releaseNotifyHandlers(false);
+    this.vibrationCharacteristic = null;
+    this.alertListeners.forEach((cb) => cb(null));
     this.emitStatus("disconnected");
   };
 
@@ -61,10 +71,24 @@ export class BleDataSource implements DataSource {
   async start(): Promise<void> {
     try {
       if (!this.device) {
-        this.device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID],
-        });
+        try {
+          this.device = await navigator.bluetooth.requestDevice({
+            filters: [
+              { name: "SweatSalt" },
+              { namePrefix: "SweatSalt" },
+              { services: [SWEATSALT_SERVICE_UUID] },
+            ],
+            optionalServices: [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID],
+          });
+        } catch (err: unknown) {
+          if (err instanceof Error && (err.name === "NotFoundError" || err.message?.includes("User cancelled"))) {
+            throw err;
+          }
+          this.device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [SWEATSALT_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID, BATTERY_SERVICE_UUID],
+          });
+        }
         this.device.addEventListener("gattserverdisconnected", this.handleGattDisconnected);
       }
       // Reuses the already-paired device on retry — the disconnected
@@ -86,6 +110,9 @@ export class BleDataSource implements DataSource {
           () => this.subscribeSensorReadings(server),
           () => this.readDeviceInfo(server),
           () => this.subscribeBattery(server),
+          () => this.setupVibration(server),
+          () => this.syncTime(server),
+          () => this.subscribeAlerts(server),
         ]) {
           try {
             await step();
@@ -110,6 +137,17 @@ export class BleDataSource implements DataSource {
         const value = dv.getFloat32(0, true);
         this.readingListeners.forEach((cb) => cb({ source, value, ts: Date.now() }));
       });
+      try {
+        const initial = await characteristic.readValue();
+        if (initial && initial.byteLength >= 4) {
+          const value = initial.getFloat32(0, true);
+          if (!Number.isNaN(value)) {
+            this.readingListeners.forEach((cb) => cb({ source, value, ts: Date.now() }));
+          }
+        }
+      } catch {
+        // Initial read is best-effort; notification stream will supply values
+      }
     }
   }
 
@@ -138,10 +176,79 @@ export class BleDataSource implements DataSource {
       if (!dv) return;
       this.batteryListeners.forEach((cb) => cb(dv.getUint8(0)));
     });
+    try {
+      const initial = await characteristic.readValue();
+      if (initial && initial.byteLength >= 1) {
+        this.batteryListeners.forEach((cb) => cb(initial.getUint8(0)));
+      }
+    } catch {
+      // Best-effort initial read
+    }
+  }
+
+  private async setupVibration(server: BluetoothRemoteGATTServer): Promise<void> {
+    const service = await server.getPrimaryService(SWEATSALT_SERVICE_UUID);
+    this.vibrationCharacteristic = await service.getCharacteristic(CHAR_VIBRATION_UUID);
+  }
+
+  // The watch has no RTC. Send local wall-clock time as seconds since the
+  // epoch (UTC seconds shifted by the phone's offset) so the face shows the
+  // wearer's local time and date.
+  private async syncTime(server: BluetoothRemoteGATTServer): Promise<void> {
+    const service = await server.getPrimaryService(SWEATSALT_SERVICE_UUID);
+    const characteristic = await service.getCharacteristic(CHAR_TIME_UUID);
+    const now = new Date();
+    const localSeconds = Math.floor(now.getTime() / 1000) - now.getTimezoneOffset() * 60;
+    const buf = new Uint8Array(4);
+    new DataView(buf.buffer).setUint32(0, localSeconds >>> 0, true);
+    await characteristic.writeValue(buf);
+  }
+
+  private async subscribeAlerts(server: BluetoothRemoteGATTServer): Promise<void> {
+    const service = await server.getPrimaryService(SWEATSALT_SERVICE_UUID);
+    const characteristic = await service.getCharacteristic(CHAR_ALERT_UUID);
+    const emit = (dv: DataView | undefined) => {
+      if (!dv || dv.byteLength < 1) return;
+      const alert = ALERT_BY_CODE[dv.getUint8(0)] ?? null;
+      this.alertListeners.forEach((cb) => cb(alert));
+    };
+    await characteristic.startNotifications();
+    this.onNotify(characteristic, () => emit(characteristic.value));
+    try {
+      emit(await characteristic.readValue());
+    } catch {
+      // Best-effort initial read
+    }
+  }
+
+  async setVibration(intensity: number): Promise<void> {
+    if (!this.vibrationCharacteristic) return;
+    const clamped = Math.max(0, Math.min(255, Math.round(intensity)));
+    const buf = new Uint8Array([clamped]);
+    try {
+      const c = this.vibrationCharacteristic as BluetoothRemoteGATTCharacteristic & {
+        writeValueWithoutResponse?: (data: BufferSource) => Promise<void>;
+      };
+      if (typeof c.writeValueWithoutResponse === "function") {
+        await c.writeValueWithoutResponse(buf);
+      } else {
+        await c.writeValue(buf);
+      }
+    } catch {
+      // Best-effort write
+    }
+  }
+
+  async buzz(durationMs = 200, intensity = 200): Promise<void> {
+    await this.setVibration(intensity);
+    setTimeout(() => {
+      void this.setVibration(0);
+    }, durationMs);
   }
 
   stop(): void {
     this.releaseNotifyHandlers(true);
+    this.vibrationCharacteristic = null;
     this.device?.removeEventListener("gattserverdisconnected", this.handleGattDisconnected);
     this.device?.gatt?.disconnect();
     this.device = null;
@@ -161,5 +268,9 @@ export class BleDataSource implements DataSource {
 
   onBattery(cb: (percent: number) => void): Unsubscribe {
     return addListener(this.batteryListeners, cb);
+  }
+
+  onAlert(cb: (alert: DeviceAlert | null) => void): Unsubscribe {
+    return addListener(this.alertListeners, cb);
   }
 }

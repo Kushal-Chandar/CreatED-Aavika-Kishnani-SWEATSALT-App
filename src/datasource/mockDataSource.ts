@@ -106,4 +106,8 @@ export class MockDataSource implements DataSource {
   onBattery(cb: (percent: number) => void): Unsubscribe {
     return addListener(this.batteryListeners, cb);
   }
+
+  async setVibration(_intensity: number): Promise<void> {}
+
+  async buzz(_durationMs = 200, _intensity = 200): Promise<void> {}
 }

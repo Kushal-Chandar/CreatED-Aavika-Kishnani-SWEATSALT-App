@@ -6,6 +6,10 @@ export interface Reading {
   ts: number;
 }
 
+// Alert currently showing on the wearable's screen; null once it is
+// dismissed (button press) or the condition clears.
+export type DeviceAlert = "fever" | "highHr" | "lowHr" | "battery";
+
 export type ConnectionStatus = "connected" | "disconnected";
 
 // Firmware-assigned unique ID + a human-friendly paired name — read from
@@ -31,4 +35,8 @@ export interface DataSource {
   // Service (0x180F) — see the design spec's battery ADC voltage-divider
   // note for how firmware derives the percentage.
   onBattery(cb: (percent: number) => void): Unsubscribe;
+  // Real hardware only: alerts raised on the device itself.
+  onAlert?(cb: (alert: DeviceAlert | null) => void): Unsubscribe;
+  setVibration?(intensity: number): Promise<void>;
+  buzz?(durationMs?: number, intensity?: number): Promise<void>;
 }

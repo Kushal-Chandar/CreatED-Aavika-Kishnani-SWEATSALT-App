@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { Dashboard } from "./Dashboard";
 import { ThemeProvider } from "../theme/ThemeContext";
-import type { DataSource, Reading, ConnectionStatus, DeviceInfo } from "../datasource/types";
+import type { DataSource, Reading, ConnectionStatus, DeviceInfo, DeviceAlert } from "../datasource/types";
 
 class FakeDataSource implements DataSource {
   private readingCb: ((r: Reading) => void) | null = null;
@@ -41,8 +41,18 @@ class FakeDataSource implements DataSource {
       this.batteryCb = null;
     };
   }
+  private alertCb: ((a: DeviceAlert | null) => void) | null = null;
+  onAlert(cb: (a: DeviceAlert | null) => void): () => void {
+    this.alertCb = cb;
+    return () => {
+      this.alertCb = null;
+    };
+  }
+  reportAlert(a: DeviceAlert | null): void {
+    this.alertCb?.(a);
+  }
   get hasListeners(): boolean {
-    return !!(this.readingCb || this.statusCb || this.deviceInfoCb || this.batteryCb);
+    return !!(this.readingCb || this.statusCb || this.deviceInfoCb || this.batteryCb || this.alertCb);
   }
   emit(reading: Reading): void {
     this.readingCb?.(reading);
@@ -166,5 +176,38 @@ describe("Dashboard", () => {
       source.reportDeviceInfo({ id: "SWST-1", name: "SweatSalt" });
     });
     expect(screen.queryByTestId("connect-device-button")).not.toBeInTheDocument();
+  });
+
+  it("shows a disconnect button when device info is reported and onDisconnectDevice is passed", () => {
+    const source = new FakeDataSource();
+    const onDisconnect = vi.fn();
+    render(
+      <ThemeProvider>
+        <Dashboard dataSource={source} onDisconnectDevice={onDisconnect} />
+      </ThemeProvider>
+    );
+
+    act(() => {
+      source.reportDeviceInfo({ id: "SWST-1", name: "SweatSalt" });
+    });
+    const disconnectBtn = screen.getByTestId("disconnect-device-button");
+    fireEvent.click(disconnectBtn);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the wearable's alert and clears it when the device dismisses it", () => {
+    const source = new FakeDataSource();
+    render(
+      <ThemeProvider>
+        <Dashboard dataSource={source} />
+      </ThemeProvider>
+    );
+    expect(screen.queryByTestId("device-alert-banner")).toBeNull();
+
+    act(() => source.reportAlert("fever"));
+    expect(screen.getByTestId("device-alert-banner").textContent).toContain("Fever");
+
+    act(() => source.reportAlert(null));
+    expect(screen.queryByTestId("device-alert-banner")).toBeNull();
   });
 });
