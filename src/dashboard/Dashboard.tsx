@@ -123,43 +123,33 @@ export function Dashboard({ dataSource, onConnectDevice, onDisconnectDevice }: D
           </div>
           <div className="flex flex-col items-end gap-1">
             <BatteryPill percent={battery} />
-            {deviceInfo ? (
-              <div className="flex items-center gap-2 font-sans text-[0.65rem] text-white/40">
-                <span>{deviceInfo.name} <span className="font-mono">· {deviceInfo.id}</span></span>
-                {onDisconnectDevice && (
-                  <button
-                    type="button"
-                    onClick={onDisconnectDevice}
-                    data-testid="disconnect-device-button"
-                    className="text-white/45 underline decoration-white/20 underline-offset-2 hover:text-white/70"
-                  >
-                    Disconnect
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                {onConnectDevice ? (
-                  <button
-                    type="button"
-                    onClick={onConnectDevice}
-                    data-testid="connect-device-button"
-                    className="font-sans text-[0.65rem] text-white/45 underline decoration-white/20 underline-offset-2 hover:text-white/70"
-                  >
-                    Connect device
-                  </button>
-                ) : onDisconnectDevice ? (
-                  <button
-                    type="button"
-                    onClick={onDisconnectDevice}
-                    data-testid="disconnect-device-button"
-                    className="font-sans text-[0.65rem] text-white/45 underline decoration-white/20 underline-offset-2 hover:text-white/70"
-                  >
-                    Switch to Demo
-                  </button>
-                ) : null}
-              </div>
-            )}
+            <div className="flex items-center gap-2 font-sans text-[0.65rem] text-white/40">
+              {deviceInfo && (
+                <span>
+                  {deviceInfo.name} <span className="font-mono">· {deviceInfo.id}</span>
+                </span>
+              )}
+              {onConnectDevice && (
+                <button
+                  type="button"
+                  onClick={onConnectDevice}
+                  data-testid="connect-device-button"
+                  className="text-white/60 underline decoration-white/30 underline-offset-2 hover:text-white/90"
+                >
+                  Connect device
+                </button>
+              )}
+              {onDisconnectDevice && (
+                <button
+                  type="button"
+                  onClick={onDisconnectDevice}
+                  data-testid="disconnect-device-button"
+                  className="text-white/45 underline decoration-white/20 underline-offset-2 hover:text-white/70"
+                >
+                  {deviceInfo ? "Disconnect" : "Switch to Demo"}
+                </button>
+              )}
+            </div>
           </div>
         </header>
 

@@ -164,7 +164,7 @@ describe("Dashboard", () => {
     expect(onConnectDevice).toHaveBeenCalledTimes(1);
   });
 
-  it("omits the connect-device button once a real device has reported its info", () => {
+  it("keeps the connect-device button visible even though the demo source reports a placeholder device", () => {
     const source = new FakeDataSource();
     render(
       <ThemeProvider>
@@ -173,9 +173,9 @@ describe("Dashboard", () => {
     );
 
     act(() => {
-      source.reportDeviceInfo({ id: "SWST-1", name: "SweatSalt" });
+      source.reportDeviceInfo({ id: "SWST-7F3A21", name: "SweatSalt Dev Unit" });
     });
-    expect(screen.queryByTestId("connect-device-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("connect-device-button")).toBeInTheDocument();
   });
 
   it("shows a disconnect button when device info is reported and onDisconnectDevice is passed", () => {
