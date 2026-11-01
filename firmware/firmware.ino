@@ -18,7 +18,7 @@
 //    D1  GPIO3   GSR (analog)
 //    D2  GPIO4   Battery divider (analog, 1:2)
 //    D3  GPIO5   Push-button to GND (INPUT_PULLUP, active-low)
-//                short press = dismiss alert / next screen, long = watch face
+//                short press = dismiss alert / next screen, long = home screen
 //    D4  GPIO6   I2C SDA  — OLED 0x3D, MPU-6050 0x68, TMP117 0x48
 //    D5  GPIO7   I2C SCL
 //    D6  GPIO21  Vibration motor (PWM, via driver)
@@ -58,7 +58,6 @@
 #define CHAR_TEMP_UUID         "5a7b0000-0001-4a6e-9c1a-000000000003"
 #define CHAR_IMU_UUID          "5a7b0000-0001-4a6e-9c1a-000000000004"
 #define CHAR_VIBRATION_UUID    "5a7b0000-0001-4a6e-9c1a-000000000005"  // WRITE: 1 byte PWM 0-255
-#define CHAR_TIME_UUID         "5a7b0000-0001-4a6e-9c1a-000000000006"  // WRITE: uint32 LE local epoch s
 #define CHAR_ALERT_UUID        "5a7b0000-0001-4a6e-9c1a-000000000007"  // READ|NOTIFY: 1 byte AlertType
 
 NimBLEServer         *bleServer;
@@ -175,14 +174,6 @@ int     waveIdx = 0;
 float accBuf[ACC_LEN] = {0};
 int   accIdx = 0;
 float activityEma = 0.0f;              // smoothed |a| - 1 g
-
-// The watch has no RTC: the app writes local epoch seconds over BLE on
-// connect and we count on from there. Until then it runs from boot (00:00).
-volatile uint32_t timeBaseSec = 0;
-volatile uint32_t timeBaseMs  = 0;
-volatile bool     timeSynced  = false;
-
-uint32_t localEpoch() { return timeBaseSec + (millis() - timeBaseMs) / 1000UL; }
 
 #define LED_ON   HIGH
 #define LED_OFF  LOW
@@ -505,7 +496,7 @@ bool alertVisible() { return activeAlert != ALERT_NONE && !alertDismissed; }
 // =============================================================================
 //  PUSH BUTTON  (D3 -> GND, INPUT_PULLUP, active-low)
 //    short press : dismiss active alert, otherwise next screen
-//    long press  : back to the watch face
+//    long press  : back to the home screen
 //    any press   : wakes a sleeping display (first press only wakes)
 // =============================================================================
 
@@ -640,68 +631,41 @@ void drawStatusBar(const char *title, int page) {
 
 
 // =============================================================================
-//  WATCH FACE & PAGES
+//  HOME SCREEN & PAGES
 // =============================================================================
 
-const char *const WEEKDAYS[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-const char *const MONTHS[]   = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                                "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-
-// Howard Hinnant's civil-from-days; days = days since 1970-01-01.
-void civilFromDays(int32_t z, int &y, int &m, int &d) {
-  z += 719468;
-  int32_t  era = (z >= 0 ? z : z - 146096) / 146097;
-  uint32_t doe = (uint32_t)(z - era * 146097);
-  uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  y            = (int)yoe + era * 400;
-  uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  uint32_t mp  = (5 * doy + 2) / 153;
-  d            = (int)(doy - (153 * mp + 2) / 5 + 1);
-  m            = (int)(mp < 10 ? mp + 3 : mp - 9);
-  if (m <= 2) y++;
-}
-
+// Home screen: the vitals at a glance, fitness-band style.
 void drawFace() {
-  drawStatusBar("", PAGE_FACE);
-
-  uint32_t t   = localEpoch();
-  uint32_t sod = t % 86400UL;
-  int hh = sod / 3600, mm = (sod / 60) % 60, ss = sod % 60;
+  drawStatusBar("NOW", PAGE_FACE);
   char buf[16];
 
-  // HH:MM in 18x24 digits, colon blinks, seconds tucked at the right.
-  snprintf(buf, sizeof(buf), "%02d", hh);
-  textAt(6, 12, 3, buf);
-  if (ss % 2 == 0) textAt(42, 12, 3, ":");
-  snprintf(buf, sizeof(buf), "%02d", mm);
-  textAt(60, 12, 3, buf);
-  snprintf(buf, sizeof(buf), "%02d", ss);
-  textAt(104, 28, 1, buf);
-
-  if (timeSynced) {
-    int y, m, d;
-    int32_t days = (int32_t)(t / 86400UL);
-    civilFromDays(days, y, m, d);
-    snprintf(buf, sizeof(buf), "%s %d %s", WEEKDAYS[(days + 4) % 7], d, MONTHS[m - 1]);
-    textCentered(64, 41, 1, buf);
-  } else {
-    textCentered(64, 41, 1, "open app to sync");
-  }
-
-  // Glance row: heart rate, temperature, sweat.
-  drawHeart(7, 53, 2);
+  // Heart rate, big.
+  bool beat = lastBeatTime != 0 && millis() - lastBeatTime < 150;
+  drawHeart(9, 21, beat ? 4 : 3);
   if (bpmValid) snprintf(buf, sizeof(buf), "%d", bpm);
   else          snprintf(buf, sizeof(buf), "--");
-  textAt(16, 52, 1, buf);
+  textAt(24, 13, 3, buf);
+  textAt(24, 38, 1, "BPM");
 
-  drawMiniThermo(49, 51);
-  if (tempOk && !isnan(tempC)) snprintf(buf, sizeof(buf), "%.1f", tempC);
+  // Activity level on the right.
+  const char *label = !mpuOk                ? "--"
+                    : activityEma < 0.06f   ? "STILL"
+                    : activityEma < 0.25f   ? "LIGHT"
+                                            : "ACTIVE";
+  textAt(86, 14, 1, "MOVE");
+  textAt(86, 25, 1, label);
+
+  // Temperature and sweat cards.
+  display.drawRoundRect(2, 46, 60, 17, 4, SSD1306_WHITE);
+  drawMiniThermo(8, 49);
+  if (tempOk && !isnan(tempC)) snprintf(buf, sizeof(buf), "%.1fC", tempC);
   else                         snprintf(buf, sizeof(buf), "--");
-  textAt(58, 52, 1, buf);
+  textAt(20, 51, 1, buf);
 
-  drawDrop(95, 56, 3);
-  snprintf(buf, sizeof(buf), "%.1f", gsrMicrosiemens);
-  textAt(102, 52, 1, buf);
+  display.drawRoundRect(66, 46, 60, 17, 4, SSD1306_WHITE);
+  drawDrop(74, 56, 3);
+  snprintf(buf, sizeof(buf), "%.1fuS", gsrMicrosiemens);
+  textAt(84, 51, 1, buf);
 }
 
 void drawPage_HeartRate() {
@@ -780,13 +744,13 @@ void drawPage_GSR() {
   int segs = (int)((constrain(gsrMicrosiemens, 0.0f, 20.0f) / 20.0f) * 16.0f + 0.5f);
   for (int i = 0; i < 16; i++) {
     int x = 4 + i * 7;
-    if (i < segs) display.fillRect(x, 49, 5, 6, SSD1306_WHITE);
-    else          display.drawRect(x, 49, 5, 6, SSD1306_WHITE);
+    if (i < segs) display.fillRect(x, 47, 5, 6, SSD1306_WHITE);
+    else          display.drawRect(x, 47, 5, 6, SSD1306_WHITE);
   }
   const char *label = gsrMicrosiemens > 15.0f ? "HEAVY SWEAT"
                     : gsrMicrosiemens > 5.0f  ? "MODERATE"
                                               : "RESTING";
-  textAt(4, 57, 1, label);
+  textAt(4, 55, 1, label);
 }
 
 void drawPage_Accel() {
@@ -800,18 +764,18 @@ void drawPage_Accel() {
 
   snprintf(buf, sizeof(buf), "%.2f", isnan(accelG) ? 0.0f : accelG);
   textAt(4, 13, 3, buf);
-  textAt(62, 30, 1, "g");
+  textAt(4, 38, 1, "g  total accel");
 
   const char *label = activityEma < 0.06f ? "STILL" : activityEma < 0.25f ? "LIGHT" : "ACTIVE";
-  textAt(80, 15, 1, "ACTIVITY");
-  textAt(80, 26, 1, label);
+  textAt(88, 14, 1, "MOVE");
+  textAt(88, 25, 1, label);
 
   // Rolling |a|-1g history.
   int prevY = -1;
   for (int x = 0; x < ACC_LEN; x++) {
     float v = accBuf[(accIdx + x) % ACC_LEN];
     int px  = x * 2;
-    int y   = 62 - (int)(constrain(v, 0.0f, 1.0f) * 18.0f);
+    int y   = 62 - (int)(constrain(v * 2.0f, 0.0f, 1.0f) * 14.0f);
     if (prevY >= 0) display.drawLine(px - 2, prevY, px, y, SSD1306_WHITE);
     prevY = y;
   }
@@ -822,25 +786,25 @@ void drawPage_Battery() {
   drawStatusBar("BATTERY", PAGE_BATTERY);
   char buf[16];
 
-  // Big cell with the percentage inverted over the fill.
-  display.drawRoundRect(4, 14, 78, 34, 4, SSD1306_WHITE);
-  display.fillRect(82, 25, 4, 12, SSD1306_WHITE);
-  int w = (batteryPct * 70) / 100;
-  if (w > 0) display.fillRect(8, 18, w, 26, SSD1306_WHITE);
-  snprintf(buf, sizeof(buf), "%d%%", batteryPct);
-  display.setTextColor(SSD1306_INVERSE);
-  textCentered(43, 24, 2, buf);
-  display.setTextColor(SSD1306_WHITE);
+  // Cell with a segmented fill (5 segments).
+  display.drawRoundRect(4, 16, 66, 30, 4, SSD1306_WHITE);
+  display.fillRect(70, 26, 4, 10, SSD1306_WHITE);
+  int segs = (batteryPct + 10) / 20;                       // 0..5
+  for (int i = 0; i < segs; i++) display.fillRect(8 + i * 11, 20, 9, 22, SSD1306_WHITE);
+
+  snprintf(buf, sizeof(buf), "%d", batteryPct);
+  textAt(82, 16, 2, buf);
+  textAt(82 + (int)strlen(buf) * 12, 23, 1, "%");
 
   snprintf(buf, sizeof(buf), "%.2fV", batteryVoltage);
-  textAt(92, 18, 1, buf);
+  textAt(82, 34, 1, buf);
   const char *state = batteryVoltage >= 4.0f ? "FULL"
                     : batteryVoltage >= 3.6f ? "GOOD"
                     : batteryVoltage >= 3.4f ? "LOW"
-                                             : "CRIT";
-  textAt(92, 30, 1, state);
+                                             : "CRITICAL";
+  textAt(82, 43, 1, state);
 
-  textAt(4, 54, 1, "low-battery alert <3.4V");
+  textAt(4, 56, 1, "alert below 3.4V");
 }
 
 
@@ -856,17 +820,17 @@ void drawAlertOverlay() {
   switch (activeAlert) {
     case ALERT_FEVER:
       title = "FEVER";
-      unit  = "deg C - high temp";
+      unit  = "deg C  HIGH";
       snprintf(value, sizeof(value), "%.1f", tempC);
       break;
     case ALERT_HIGH_HR:
       title = "HIGH HEART RATE";
-      unit  = "bpm - too fast";
+      unit  = "bpm  FAST";
       snprintf(value, sizeof(value), "%d", bpm);
       break;
     case ALERT_LOW_HR:
       title = "LOW HEART RATE";
-      unit  = "bpm - too slow";
+      unit  = "bpm  SLOW";
       snprintf(value, sizeof(value), "%d", bpm);
       break;
     case ALERT_BATTERY:
@@ -928,6 +892,7 @@ void updateDisplay() {
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
 
   if (alertVisible()) {
     drawAlertOverlay();
@@ -975,21 +940,6 @@ class VibrationCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-class TimeCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
-    NimBLEAttValue v = c->getValue();
-    if (v.size() < 4) return;
-    const uint8_t *p = v.data();
-    uint32_t epoch = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-                     ((uint32_t)p[3] << 24);
-    timeBaseMs  = millis();
-    timeBaseSec = epoch;
-    timeSynced  = true;
-    Serial.print(F("Clock synced: "));
-    Serial.println(epoch);
-  }
-};
-
 void notifyFloat(NimBLECharacteristic *c, float value) {
   c->setValue((const uint8_t *)&value, sizeof(value));
   c->notify();
@@ -1017,9 +967,6 @@ void setupBle() {
   NimBLECharacteristic *vib = svc->createCharacteristic(
       CHAR_VIBRATION_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   vib->setCallbacks(new VibrationCallbacks());
-  NimBLECharacteristic *clk = svc->createCharacteristic(
-      CHAR_TIME_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-  clk->setCallbacks(new TimeCallbacks());
   alertChar = svc->createCharacteristic(CHAR_ALERT_UUID, RN);
   uint8_t none = ALERT_NONE;
   alertChar->setValue(&none, 1);

@@ -7,7 +7,6 @@ import {
   CHAR_TEMP_UUID,
   CHAR_IMU_UUID,
   CHAR_VIBRATION_UUID,
-  CHAR_TIME_UUID,
   CHAR_ALERT_UUID,
   DEVICE_INFO_SERVICE_UUID,
   MODEL_NUMBER_UUID,
@@ -359,36 +358,6 @@ describe("BleDataSource", () => {
       expect(vibChar.writeValueWithoutResponse).toHaveBeenCalledWith(new Uint8Array([200]));
     });
 
-    it("writes local epoch seconds to the time characteristic on connect", async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
-      const timeChar = Object.assign(fakeCharacteristic(), {
-        writeValue: vi.fn().mockResolvedValue(undefined),
-      });
-      const service = fakeService({
-        [CHAR_GSR_UUID]: fakeCharacteristic(),
-        [CHAR_HR_UUID]: fakeCharacteristic(),
-        [CHAR_TEMP_UUID]: fakeCharacteristic(),
-        [CHAR_IMU_UUID]: fakeCharacteristic(),
-        [CHAR_VIBRATION_UUID]: fakeCharacteristic(),
-        [CHAR_TIME_UUID]: timeChar,
-        [CHAR_ALERT_UUID]: fakeCharacteristic(),
-      });
-      const device = fakeDevice({ [SWEATSALT_SERVICE_UUID]: service });
-      vi.stubGlobal("navigator", {
-        bluetooth: { requestDevice: vi.fn().mockResolvedValue(device) },
-      });
-
-      const source = new BleDataSource();
-      await source.start();
-      vi.useRealTimers();
-
-      const written = timeChar.writeValue.mock.calls[0][0] as Uint8Array;
-      const seconds = new DataView(written.buffer).getUint32(0, true);
-      const expected = Math.floor(Date.parse("2026-11-01T12:00:00Z") / 1000) - new Date("2026-11-01T12:00:00Z").getTimezoneOffset() * 60;
-      expect(seconds).toBe(expected);
-    });
-
     it("maps alert notifications to DeviceAlert and clears on disconnect", async () => {
       const alertChar = fakeCharacteristic();
       const service = fakeService({
@@ -397,7 +366,6 @@ describe("BleDataSource", () => {
         [CHAR_TEMP_UUID]: fakeCharacteristic(),
         [CHAR_IMU_UUID]: fakeCharacteristic(),
         [CHAR_VIBRATION_UUID]: fakeCharacteristic(),
-        [CHAR_TIME_UUID]: Object.assign(fakeCharacteristic(), { writeValue: vi.fn().mockResolvedValue(undefined) }),
         [CHAR_ALERT_UUID]: alertChar,
       });
       const device = fakeDevice({ [SWEATSALT_SERVICE_UUID]: service });

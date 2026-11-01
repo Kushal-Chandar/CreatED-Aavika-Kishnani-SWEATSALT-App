@@ -8,7 +8,6 @@ export const CHAR_HR_UUID = "5a7b0000-0001-4a6e-9c1a-000000000002";
 export const CHAR_TEMP_UUID = "5a7b0000-0001-4a6e-9c1a-000000000003";
 export const CHAR_IMU_UUID = "5a7b0000-0001-4a6e-9c1a-000000000004";
 export const CHAR_VIBRATION_UUID = "5a7b0000-0001-4a6e-9c1a-000000000005";
-export const CHAR_TIME_UUID = "5a7b0000-0001-4a6e-9c1a-000000000006";
 export const CHAR_ALERT_UUID = "5a7b0000-0001-4a6e-9c1a-000000000007";
 export const DEVICE_INFO_SERVICE_UUID = 0x180a;
 export const MODEL_NUMBER_UUID = 0x2a24;
@@ -111,7 +110,6 @@ export class BleDataSource implements DataSource {
           () => this.readDeviceInfo(server),
           () => this.subscribeBattery(server),
           () => this.setupVibration(server),
-          () => this.syncTime(server),
           () => this.subscribeAlerts(server),
         ]) {
           try {
@@ -189,19 +187,6 @@ export class BleDataSource implements DataSource {
   private async setupVibration(server: BluetoothRemoteGATTServer): Promise<void> {
     const service = await server.getPrimaryService(SWEATSALT_SERVICE_UUID);
     this.vibrationCharacteristic = await service.getCharacteristic(CHAR_VIBRATION_UUID);
-  }
-
-  // The watch has no RTC. Send local wall-clock time as seconds since the
-  // epoch (UTC seconds shifted by the phone's offset) so the face shows the
-  // wearer's local time and date.
-  private async syncTime(server: BluetoothRemoteGATTServer): Promise<void> {
-    const service = await server.getPrimaryService(SWEATSALT_SERVICE_UUID);
-    const characteristic = await service.getCharacteristic(CHAR_TIME_UUID);
-    const now = new Date();
-    const localSeconds = Math.floor(now.getTime() / 1000) - now.getTimezoneOffset() * 60;
-    const buf = new Uint8Array(4);
-    new DataView(buf.buffer).setUint32(0, localSeconds >>> 0, true);
-    await characteristic.writeValue(buf);
   }
 
   private async subscribeAlerts(server: BluetoothRemoteGATTServer): Promise<void> {

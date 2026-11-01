@@ -42,12 +42,11 @@ https://kushal-chandar.github.io/CreatED-Aavika-Kishnani-SWEATSALT-App/
 
 Push-button between **D3 and GND** (internal pull-up, no resistor needed):
 
-- short press: dismiss an alert, otherwise next screen (face, heart, temp, sweat, motion, battery)
-- long press (0.7 s): back to the watch face
+- short press: dismiss an alert, otherwise next screen (home, heart, temp, sweat, motion, battery)
+- long press (0.7 s): back to the home screen
 - the OLED sleeps after 30 s; any press wakes it, and alerts wake it automatically
 
-The app sets the watch clock over BLE on every connect, shows the
-wearable's alerts as a banner, and has a "Buzz my band" test button.
+The app shows the wearable's alerts as a banner, and has a "Buzz my band" test button.
 
 ## Project structure
 
